@@ -1,0 +1,347 @@
+/**
+ * Cortex desktop shell (Electron)
+ * Single dock icon — server runs in-process (no second Electron/"exec" process).
+ */
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  shell,
+  dialog,
+  session,
+} = require("electron");
+const path = require("path");
+const http = require("http");
+const fs = require("fs");
+const Module = require("module");
+
+const isDev = !app.isPackaged;
+const DEV_URL = process.env.CORTEX_URL || "http://127.0.0.1:3000";
+
+/** Fixed loopback port for packaged app (local-only). */
+const PROD_PORT = Number(process.env.CORTEX_PORT || 47832);
+
+// Dev must not share userData lock with /Applications/Cortex.app
+if (isDev) {
+  const { join } = require("path");
+  app.setPath("userData", join(app.getPath("appData"), "cortex-dev"));
+}
+
+let mainWindow = null;
+let stopping = false;
+
+function setDataDir() {
+  const dataDir = path.join(app.getPath("userData"), "data");
+  fs.mkdirSync(dataDir, { recursive: true });
+  process.env.CORTEX_DATA_DIR = dataDir;
+  return dataDir;
+}
+
+function waitForUrl(url, { timeoutMs = 90000, intervalMs = 300 } = {}) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (stopping) {
+        reject(new Error("App is quitting"));
+        return;
+      }
+      const req = http.get(url, (res) => {
+        res.resume();
+        resolve(url);
+      });
+      req.on("error", () => {
+        if (Date.now() - start > timeoutMs) {
+          reject(
+            new Error(
+              `Timed out waiting for local server at ${url}.\n` +
+                `Check that standalone/node_modules was packaged correctly.`,
+            ),
+          );
+          return;
+        }
+        setTimeout(tick, intervalMs);
+      });
+    };
+    tick();
+  });
+}
+
+function findStandaloneDir() {
+  const appPath = app.getAppPath();
+  const resources = process.resourcesPath;
+  const candidates = [
+    path.join(resources, "standalone"),
+    path.join(appPath, "desktop-runtime"),
+    path.join(appPath, ".next", "standalone"),
+    path.join(appPath, "standalone"),
+  ];
+  return candidates.find((d) => fs.existsSync(path.join(d, "server.js")));
+}
+
+/**
+ * Start Next standalone in this process so macOS shows only one dock icon.
+ * Spawning process.execPath (even with ELECTRON_RUN_AS_NODE) creates a second
+ * "exec" dock entry on macOS.
+ */
+async function startProductionServer() {
+  const standaloneDir = findStandaloneDir();
+  if (!standaloneDir) {
+    throw new Error(
+      "Could not find standalone server.js in app resources.\n" +
+        `resourcesPath=${process.resourcesPath}`,
+    );
+  }
+
+  const nextModule = path.join(standaloneDir, "node_modules", "next");
+  if (!fs.existsSync(nextModule)) {
+    throw new Error(
+      `Missing Next.js runtime at:\n${nextModule}\n\n` +
+        "Reinstall Cortex from a freshly built DMG (v0.1.1+).",
+    );
+  }
+
+  const dataDir =
+    process.env.CORTEX_DATA_DIR || path.join(app.getPath("userData"), "data");
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  // Resolve `next` (and peers) from the standalone bundle, not app.asar
+  const nm = path.join(standaloneDir, "node_modules");
+  process.env.NODE_PATH = [nm, process.env.NODE_PATH]
+    .filter(Boolean)
+    .join(path.delimiter);
+  Module._initPaths();
+
+  process.chdir(standaloneDir);
+  process.env.PORT = String(PROD_PORT);
+  process.env.HOSTNAME = "127.0.0.1";
+  process.env.CORTEX_DATA_DIR = dataDir;
+  process.env.NODE_ENV = "production";
+
+  // server.js calls startServer() and begins listening
+  require(path.join(standaloneDir, "server.js"));
+
+  const url = `http://127.0.0.1:${PROD_PORT}`;
+  await waitForUrl(url);
+  return url;
+}
+
+async function resolveServerUrl() {
+  if (isDev) {
+    await waitForUrl(DEV_URL, { timeoutMs: 120000 });
+    return DEV_URL;
+  }
+  return startProductionServer();
+}
+
+function buildMenu() {
+  const isMac = process.platform === "darwin";
+  const template = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" },
+              { type: "separator" },
+              { role: "services" },
+              { type: "separator" },
+              { role: "hide" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ]
+      : []),
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Reload",
+          accelerator: "CmdOrCtrl+R",
+          click: () => mainWindow?.webContents.reload(),
+        },
+        { type: "separator" },
+        isMac ? { role: "close" } : { role: "quit" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "togglefullscreen" },
+        { type: "separator" },
+        {
+          label: "Toggle Developer Tools",
+          accelerator: isMac ? "Alt+Command+I" : "Ctrl+Shift+I",
+          click: () => mainWindow?.webContents.toggleDevTools(),
+        },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [{ role: "minimize" }, { role: "zoom" }, { role: "front" }],
+    },
+    {
+      label: "Help",
+      submenu: [
+        {
+          label: "Open data folder",
+          click: () => {
+            const dir = process.env.CORTEX_DATA_DIR || app.getPath("userData");
+            shell.openPath(dir);
+          },
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+async function createWindow(serverUrl) {
+  // Do NOT call app.dock.setIcon() with a raw PNG — it produces a square,
+  // unmasked dock tile next to the proper .icns icon from Info.plist.
+  // Let macOS use CFBundleIconFile (icon.icns) for correct rounded Dock treatment.
+
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 1100,
+    minHeight: 700,
+    title: "Cortex — Agentic OS",
+    backgroundColor: "#07090f",
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+    if (process.platform === "darwin") {
+      app.focus({ steal: true });
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (
+      url.startsWith("http://127.0.0.1") ||
+      url.startsWith("http://localhost")
+    ) {
+      return { action: "allow" };
+    }
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  await mainWindow.loadURL(serverUrl);
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+// Single instance for packaged app only (dev uses separate userData + allows restarts)
+const gotLock = isDev ? true : app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  if (!isDev) {
+    app.on("second-instance", () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+      }
+    });
+  }
+
+  app.whenReady().then(async () => {
+    try {
+      // Ensure dock uses bundle icon, not a runtime override
+      if (process.platform === "darwin") {
+        app.dock?.show();
+      }
+
+      // Allow microphone for built-in Web Speech voice-to-text
+      session.defaultSession.setPermissionRequestHandler(
+        (_wc, permission, callback) => {
+          if (
+            permission === "media" ||
+            permission === "microphone" ||
+            permission === "mediaKeySystem"
+          ) {
+            callback(true);
+            return;
+          }
+          callback(false);
+        },
+      );
+      session.defaultSession.setPermissionCheckHandler(
+        (_wc, permission) =>
+          permission === "media" ||
+          permission === "microphone" ||
+          permission === "mediaKeySystem",
+      );
+
+      setDataDir();
+      buildMenu();
+      app.setName("Cortex");
+
+      const serverUrl = await resolveServerUrl();
+      await createWindow(serverUrl);
+
+      app.on("activate", async () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+          await createWindow(serverUrl);
+        }
+      });
+    } catch (err) {
+      console.error(err);
+      dialog.showErrorBox(
+        "Cortex failed to start",
+        err instanceof Error ? err.message : String(err),
+      );
+      app.quit();
+    }
+  });
+}
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("before-quit", () => {
+  stopping = true;
+});
+
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("will-navigate", (event, url) => {
+    try {
+      const u = new URL(url);
+      if (u.hostname !== "127.0.0.1" && u.hostname !== "localhost") {
+        event.preventDefault();
+        shell.openExternal(url);
+      }
+    } catch {
+      event.preventDefault();
+    }
+  });
+});

@@ -1,26 +1,760 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #07090f;
+  --foreground: #e8ecf4;
+  --panel: #0d111a;
+  --panel-elevated: #121826;
+  --border: #1e2638;
+  --border-subtle: #161d2c;
+  --muted: #8b95a8;
+  --accent: #5b8cff;
+  --accent-soft: rgba(91, 140, 255, 0.12);
+  --cyan: #2dd4bf;
+  --violet: #a78bfa;
+  --rose: #fb7185;
+  --amber: #fbbf24;
+  --emerald: #34d399;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-panel: var(--panel);
+  --color-panel-elevated: var(--panel-elevated);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+/* Subtle grid background for command-center feel */
+.app-shell {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(91, 140, 255, 0.12), transparent),
+    linear-gradient(rgba(30, 38, 56, 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 38, 56, 0.35) 1px, transparent 1px);
+  background-size: 100% 100%, 48px 48px, 48px 48px;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3348;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4660;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(91, 140, 255, 0.08),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+
+/* ── Jarvis voice orb — natural AI communication motion ─────────────
+   Design rules:
+   - Never hard scale the artwork in/out (looks fake)
+   - Life = luminosity, soft fields, slow orbits, organic signal bars
+   - Easing is long and smooth (cubic-bezier), not snappy bounce
+   ────────────────────────────────────────────────────────────────── */
+
+.jarvis-avatar {
+  --jarvis-cyan: #38bdf8;
+  --jarvis-deep: #0ea5e9;
+  --ease-organic: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-breathe: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  position: relative;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.jarvis-avatar--circle {
+  border-radius: 9999px;
+}
+
+.jarvis-avatar--orb {
+  border-radius: 1.5rem;
+}
+
+/* Stable art frame — transform stays near identity */
+.jarvis-avatar__face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 3;
+  transition: box-shadow 0.8s var(--ease-organic), filter 0.8s var(--ease-organic);
+}
+
+.jarvis-avatar--circle .jarvis-avatar__face {
+  inset: 4%;
+  border-radius: 9999px;
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.28),
+    0 0 20px rgba(14, 165, 233, 0.22);
+}
+
+.jarvis-avatar--orb .jarvis-avatar__face {
+  border-radius: 1.5rem;
+  background: #01040a;
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.18),
+    0 12px 48px rgba(0, 0, 0, 0.45),
+    0 0 80px rgba(14, 165, 233, 0.1);
+}
+
+/* Embedded jarvis.html ring HUD */
+.jarvis-avatar__iframe {
+  border-radius: inherit;
+  background: #000814;
+  z-index: 3;
+}
+
+.jarvis-avatar--orb {
+  background: #000814;
+  border-radius: 1.25rem;
+  box-shadow:
+    0 0 0 1px rgba(77, 216, 255, 0.22),
+    0 12px 48px rgba(0, 0, 0, 0.5),
+    0 0 80px rgba(10, 132, 255, 0.15);
+}
+
+/* Compact chat-bubble core (no full canvas) */
+.jarvis-avatar__face--mini {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 40% 35%, rgba(168, 240, 255, 0.35), transparent 45%),
+    radial-gradient(circle at 50% 55%, rgba(77, 216, 255, 0.25), transparent 60%),
+    radial-gradient(circle at 60% 45%, rgba(185, 103, 255, 0.2), transparent 55%),
+    #04050a;
+}
+
+.jarvis-avatar__mini-core {
+  position: absolute;
+  width: 38%;
+  height: 38%;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 40% 35%, #fff 0%, #a8f0ff 30%, #4dd8ff 65%, transparent 75%);
+  box-shadow:
+    0 0 12px rgba(77, 216, 255, 0.7),
+    0 0 28px rgba(185, 103, 255, 0.35);
+  animation: jarvis-core-glow 3.2s var(--ease-breathe) infinite;
+}
+
+.jarvis-avatar__mini-ring {
+  position: absolute;
+  width: 68%;
+  height: 68%;
+  border-radius: 9999px;
+  border: 1px solid rgba(126, 232, 255, 0.35);
+  box-shadow: 0 0 10px rgba(77, 216, 255, 0.25);
+  opacity: 0.7;
+}
+
+.jarvis-avatar--speaking .jarvis-avatar__mini-core,
+.jarvis-avatar--listening .jarvis-avatar__mini-core {
+  animation: jarvis-core-speak 1.4s var(--ease-breathe) infinite;
+}
+
+.jarvis-avatar__img {
+  /* Legacy image path — kept for any remaining static refs */
+  will-change: filter;
+  transition: filter 0.7s var(--ease-organic);
+}
+
+/* Atmospheric field — soft, always-on presence */
+.jarvis-avatar__field {
+  position: absolute;
+  inset: -12%;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 58% 52% at 50% 42%,
+    rgba(56, 189, 248, 0.22) 0%,
+    rgba(14, 165, 233, 0.08) 42%,
+    transparent 68%
+  );
+  opacity: 0.55;
+  filter: blur(14px);
+}
+
+.jarvis-avatar__field--2 {
+  inset: -4%;
+  opacity: 0.25;
+  background: radial-gradient(
+    ellipse 40% 36% at 50% 40%,
+    rgba(125, 211, 252, 0.2) 0%,
+    transparent 65%
+  );
+  filter: blur(8px);
+}
+
+/* Slow continuous orbits (spin only — no expand/collapse) */
+.jarvis-avatar__orbit {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  z-index: 2;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  pointer-events: none;
+  opacity: 0.35;
+  width: 44%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+
+.jarvis-avatar--circle .jarvis-avatar__orbit {
+  top: 50%;
+  width: 96%;
+}
+
+.jarvis-avatar__orbit--a {
+  width: 38%;
+  border-color: rgba(56, 189, 248, 0.22);
+  border-style: solid;
+}
+
+.jarvis-avatar__orbit--b {
+  width: 52%;
+  border-color: rgba(14, 165, 233, 0.12);
+  border-style: dashed;
+  opacity: 0.28;
+}
+
+/* Soft communication ripples — luminosity only, long fade */
+.jarvis-avatar__ripple {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  z-index: 2;
+  width: 34%;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle,
+    rgba(125, 211, 252, 0.18) 0%,
+    rgba(56, 189, 248, 0.06) 45%,
+    transparent 70%
+  );
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.12);
+}
+
+.jarvis-avatar--circle .jarvis-avatar__ripple {
+  top: 50%;
+  width: 70%;
+}
+
+/* Core neural point */
+.jarvis-avatar__core {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  z-index: 4;
+  width: 10%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0.4;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(125, 211, 252, 0.55) 28%,
+    rgba(14, 165, 233, 0.15) 55%,
+    transparent 72%
+  );
+  filter: blur(1.5px);
+}
+
+.jarvis-avatar--circle .jarvis-avatar__core {
+  top: 50%;
+  width: 22%;
+}
+
+/* Diagonal sheen for “alive” surface (not scale) */
+.jarvis-avatar__sheen {
+  position: absolute;
+  inset: -20%;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.06) 48%,
+    rgba(125, 211, 252, 0.1) 52%,
+    transparent 65%
+  );
+  mix-blend-mode: screen;
+}
+
+/* Organic signal bars — low amplitude, irregular phase */
+.jarvis-avatar__signal {
+  position: absolute;
+  left: 28%;
+  right: 28%;
+  top: 56%;
+  height: 8%;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.6s var(--ease-organic);
+}
+
+.jarvis-avatar--circle .jarvis-avatar__signal {
+  top: auto;
+  bottom: 12%;
+  left: 18%;
+  right: 18%;
+  height: 16%;
+}
+
+.jarvis-avatar__signal i {
+  display: block;
+  width: 2px;
+  height: 22%;
+  border-radius: 999px;
+  background: linear-gradient(
+    to top,
+    rgba(14, 165, 233, 0.2),
+    rgba(125, 211, 252, 0.85)
+  );
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.35);
+  transform-origin: center bottom;
+}
+
+.jarvis-avatar__chip {
+  position: absolute;
+  left: 50%;
+  bottom: 16%;
+  z-index: 6;
+  transform: translateX(-50%);
+  padding: 0.22rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: rgba(125, 211, 252, 0.85);
+  background: rgba(2, 10, 20, 0.65);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  transition:
+    color 0.6s var(--ease-organic),
+    border-color 0.6s var(--ease-organic),
+    box-shadow 0.6s var(--ease-organic);
+}
+
+/* ── Idle: quiet living presence ─────────────────────────────────── */
+.jarvis-avatar--idle .jarvis-avatar__field {
+  animation: jarvis-field-breathe 5.5s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--idle .jarvis-avatar__field--2 {
+  animation: jarvis-field-breathe 7s var(--ease-breathe) infinite reverse;
+}
+.jarvis-avatar--idle .jarvis-avatar__orbit--a {
+  animation: jarvis-orbit 48s linear infinite;
+  opacity: 0.4;
+}
+.jarvis-avatar--idle .jarvis-avatar__orbit--b {
+  animation: jarvis-orbit-rev 72s linear infinite;
+  opacity: 0.28;
+}
+.jarvis-avatar--idle .jarvis-avatar__core {
+  animation: jarvis-core-glow 4.2s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--idle .jarvis-avatar__img {
+  filter: brightness(1) saturate(1) contrast(1);
+  animation: jarvis-luma 6s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--idle .jarvis-avatar__sheen {
+  opacity: 0.35;
+  animation: jarvis-sheen 9s var(--ease-organic) infinite;
+}
+
+/* ── Listening: receiving your voice (inward attention, not bounce) ─ */
+.jarvis-avatar--listening .jarvis-avatar__face {
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.35),
+    0 0 60px rgba(14, 165, 233, 0.22),
+    0 12px 48px rgba(0, 0, 0, 0.4);
+}
+.jarvis-avatar--listening .jarvis-avatar__img {
+  filter: brightness(1.08) saturate(1.15) contrast(1.02);
+  animation: jarvis-luma-listen 2.8s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--listening .jarvis-avatar__field {
+  opacity: 0.85;
+  animation: jarvis-field-listen 2.4s var(--ease-breathe) infinite;
+  background: radial-gradient(
+    ellipse 58% 52% at 50% 42%,
+    rgba(56, 189, 248, 0.38) 0%,
+    rgba(14, 165, 233, 0.14) 42%,
+    transparent 68%
+  );
+}
+.jarvis-avatar--listening .jarvis-avatar__ripple--1,
+.jarvis-avatar--listening .jarvis-avatar__ripple--2,
+.jarvis-avatar--listening .jarvis-avatar__ripple--3 {
+  animation: jarvis-ripple-in 2.6s var(--ease-organic) infinite;
+}
+.jarvis-avatar--listening .jarvis-avatar__ripple--2 {
+  animation-delay: 0.85s;
+}
+.jarvis-avatar--listening .jarvis-avatar__ripple--3 {
+  animation-delay: 1.7s;
+}
+.jarvis-avatar--listening .jarvis-avatar__orbit--a {
+  animation: jarvis-orbit 22s linear infinite;
+  opacity: 0.55;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+.jarvis-avatar--listening .jarvis-avatar__core {
+  animation: jarvis-core-glow 1.8s var(--ease-breathe) infinite;
+  opacity: 0.75;
+}
+.jarvis-avatar--listening .jarvis-avatar__signal {
+  opacity: 0.55;
+}
+.jarvis-avatar--listening .jarvis-avatar__signal i {
+  animation: jarvis-signal 1.4s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(2) { animation-delay: 0.08s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(3) { animation-delay: 0.16s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(4) { animation-delay: 0.04s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(5) { animation-delay: 0.2s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(6) { animation-delay: 0.12s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(7) { animation-delay: 0.24s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(8) { animation-delay: 0.1s; }
+.jarvis-avatar--listening .jarvis-avatar__signal i:nth-child(9) { animation-delay: 0.18s; }
+.jarvis-avatar--listening .jarvis-avatar__chip {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 18px rgba(14, 165, 233, 0.25);
+}
+.jarvis-avatar--listening .jarvis-avatar__sheen {
+  opacity: 0.5;
+  animation: jarvis-sheen 5s var(--ease-organic) infinite;
+}
+
+/* ── Thinking / processing: deep computation ─────────────────────── */
+.jarvis-avatar--thinking .jarvis-avatar__img,
+.jarvis-avatar--processing .jarvis-avatar__img {
+  filter: brightness(1.04) saturate(1.08) sepia(0.12);
+  animation: jarvis-luma-think 3.2s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--thinking .jarvis-avatar__field,
+.jarvis-avatar--processing .jarvis-avatar__field {
+  animation: jarvis-field-breathe 2.8s var(--ease-breathe) infinite;
+  background: radial-gradient(
+    ellipse 58% 52% at 50% 42%,
+    rgba(251, 191, 36, 0.22) 0%,
+    rgba(56, 189, 248, 0.1) 45%,
+    transparent 70%
+  );
+}
+.jarvis-avatar--thinking .jarvis-avatar__orbit--a,
+.jarvis-avatar--processing .jarvis-avatar__orbit--a {
+  animation: jarvis-orbit 12s linear infinite;
+  opacity: 0.6;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+.jarvis-avatar--thinking .jarvis-avatar__orbit--b {
+  animation: jarvis-orbit-rev 18s linear infinite;
+  opacity: 0.4;
+  border-color: rgba(245, 158, 11, 0.25);
+}
+.jarvis-avatar--thinking .jarvis-avatar__sheen,
+.jarvis-avatar--processing .jarvis-avatar__sheen {
+  opacity: 0.55;
+  animation: jarvis-sheen 3.5s var(--ease-organic) infinite;
+}
+.jarvis-avatar--thinking .jarvis-avatar__core,
+.jarvis-avatar--processing .jarvis-avatar__core {
+  animation: jarvis-core-glow 2.2s var(--ease-breathe) infinite;
+  background: radial-gradient(
+    circle,
+    rgba(255, 248, 220, 0.9) 0%,
+    rgba(251, 191, 36, 0.5) 30%,
+    rgba(14, 165, 233, 0.12) 55%,
+    transparent 72%
+  );
+}
+.jarvis-avatar--thinking .jarvis-avatar__chip,
+.jarvis-avatar--processing .jarvis-avatar__chip {
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+/* ── Speaking: real AI communication energy ────────────────────────
+   Soft outward luminosity, continuous signal, stable art scale.     */
+.jarvis-avatar--speaking .jarvis-avatar__face {
+  box-shadow:
+    0 0 0 1px rgba(125, 211, 252, 0.4),
+    0 0 50px rgba(14, 165, 233, 0.32),
+    0 0 100px rgba(56, 189, 248, 0.18),
+    0 16px 48px rgba(0, 0, 0, 0.45);
+}
+.jarvis-avatar--speaking .jarvis-avatar__img {
+  filter: brightness(1.12) saturate(1.25) contrast(1.04);
+  animation: jarvis-luma-speak 2.1s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--speaking .jarvis-avatar__field {
+  opacity: 1;
+  animation: jarvis-field-speak 2s var(--ease-breathe) infinite;
+  background: radial-gradient(
+    ellipse 62% 55% at 50% 42%,
+    rgba(125, 211, 252, 0.42) 0%,
+    rgba(14, 165, 233, 0.18) 40%,
+    rgba(56, 189, 248, 0.05) 62%,
+    transparent 75%
+  );
+}
+.jarvis-avatar--speaking .jarvis-avatar__field--2 {
+  opacity: 0.55;
+  animation: jarvis-field-speak 2.6s var(--ease-breathe) infinite reverse;
+}
+.jarvis-avatar--speaking .jarvis-avatar__ripple--1,
+.jarvis-avatar--speaking .jarvis-avatar__ripple--2,
+.jarvis-avatar--speaking .jarvis-avatar__ripple--3 {
+  animation: jarvis-ripple-out 3.2s var(--ease-organic) infinite;
+}
+.jarvis-avatar--speaking .jarvis-avatar__ripple--2 {
+  animation-delay: 1.05s;
+}
+.jarvis-avatar--speaking .jarvis-avatar__ripple--3 {
+  animation-delay: 2.1s;
+}
+.jarvis-avatar--speaking .jarvis-avatar__orbit--a {
+  animation: jarvis-orbit 16s linear infinite;
+  opacity: 0.65;
+  border-color: rgba(125, 211, 252, 0.45);
+}
+.jarvis-avatar--speaking .jarvis-avatar__orbit--b {
+  animation: jarvis-orbit-rev 24s linear infinite;
+  opacity: 0.45;
+  border-color: rgba(56, 189, 248, 0.28);
+}
+.jarvis-avatar--speaking .jarvis-avatar__core {
+  opacity: 0.95;
+  animation: jarvis-core-speak 1.6s var(--ease-breathe) infinite;
+  width: 12%;
+}
+.jarvis-avatar--speaking .jarvis-avatar__sheen {
+  opacity: 0.7;
+  animation: jarvis-sheen 2.8s var(--ease-organic) infinite;
+}
+.jarvis-avatar--speaking .jarvis-avatar__signal {
+  opacity: 0.9;
+}
+.jarvis-avatar--speaking .jarvis-avatar__signal i {
+  animation: jarvis-signal-speak 0.9s var(--ease-breathe) infinite;
+}
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(1) { animation-delay: 0s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(2) { animation-delay: 0.07s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(3) { animation-delay: 0.14s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(4) { animation-delay: 0.04s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(5) { animation-delay: 0.11s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(6) { animation-delay: 0.18s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(7) { animation-delay: 0.09s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(8) { animation-delay: 0.15s; }
+.jarvis-avatar--speaking .jarvis-avatar__signal i:nth-child(9) { animation-delay: 0.05s; }
+.jarvis-avatar--speaking .jarvis-avatar__chip {
+  color: #e0f2fe;
+  border-color: rgba(125, 211, 252, 0.55);
+  box-shadow: 0 0 22px rgba(56, 189, 248, 0.35);
+}
+
+/* Offline */
+.jarvis-avatar--offline {
+  filter: grayscale(0.85) brightness(0.68);
+}
+.jarvis-avatar--offline .jarvis-avatar__field,
+.jarvis-avatar--offline .jarvis-avatar__orbit,
+.jarvis-avatar--offline .jarvis-avatar__ripple,
+.jarvis-avatar--offline .jarvis-avatar__core,
+.jarvis-avatar--offline .jarvis-avatar__sheen,
+.jarvis-avatar--offline .jarvis-avatar__signal {
+  opacity: 0 !important;
+  animation: none !important;
+}
+.jarvis-avatar--offline .jarvis-avatar__chip {
+  color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+/* ── Keyframes: organic, long, no cartoon bounce ─────────────────── */
+@keyframes jarvis-field-breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.72; }
+}
+
+@keyframes jarvis-field-listen {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 0.95; }
+}
+
+@keyframes jarvis-field-speak {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+@keyframes jarvis-luma {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  50% { filter: brightness(1.04) saturate(1.05); }
+}
+
+@keyframes jarvis-luma-listen {
+  0%, 100% { filter: brightness(1.05) saturate(1.12); }
+  50% { filter: brightness(1.1) saturate(1.18); }
+}
+
+@keyframes jarvis-luma-think {
+  0%, 100% { filter: brightness(1.02) saturate(1.05) sepia(0.1); }
+  50% { filter: brightness(1.07) saturate(1.12) sepia(0.16); }
+}
+
+@keyframes jarvis-luma-speak {
+  0%, 100% { filter: brightness(1.1) saturate(1.2) contrast(1.03); }
+  40% { filter: brightness(1.14) saturate(1.28) contrast(1.05); }
+  70% { filter: brightness(1.08) saturate(1.18) contrast(1.02); }
+}
+
+@keyframes jarvis-orbit {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes jarvis-orbit-rev {
+  to { transform: translate(-50%, -50%) rotate(-360deg); }
+}
+
+/* Outward speech energy — soft expand + fade (overlay only) */
+@keyframes jarvis-ripple-out {
+  0% {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  70% {
+    opacity: 0.12;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.35);
+  }
+}
+
+/* Inward listening — soft compress of field attention */
+@keyframes jarvis-ripple-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.28);
+  }
+  35% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.88);
+  }
+}
+
+@keyframes jarvis-core-glow {
+  0%, 100% { opacity: 0.35; filter: blur(1.5px); }
+  50% { opacity: 0.7; filter: blur(2px); }
+}
+
+@keyframes jarvis-core-speak {
+  0%, 100% { opacity: 0.65; filter: blur(1px); }
+  50% { opacity: 1; filter: blur(2.5px); }
+}
+
+@keyframes jarvis-sheen {
+  0% { transform: translateX(-30%) rotate(0.001deg); }
+  100% { transform: translateX(30%) rotate(0.001deg); }
+}
+
+@keyframes jarvis-signal {
+  0%, 100% { transform: scaleY(0.35); opacity: 0.45; }
+  50% { transform: scaleY(0.85); opacity: 0.8; }
+}
+
+@keyframes jarvis-signal-speak {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.5; }
+  30% { transform: scaleY(0.95); opacity: 1; }
+  55% { transform: scaleY(0.45); opacity: 0.65; }
+  75% { transform: scaleY(0.8); opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-avatar__field,
+  .jarvis-avatar__orbit,
+  .jarvis-avatar__ripple,
+  .jarvis-avatar__core,
+  .jarvis-avatar__sheen,
+  .jarvis-avatar__img,
+  .jarvis-avatar__signal i {
+    animation: none !important;
+  }
+  .jarvis-avatar--speaking .jarvis-avatar__field,
+  .jarvis-avatar--speaking .jarvis-avatar__signal {
+    opacity: 0.75;
+  }
 }

@@ -1,26 +1,111 @@
 {
-  "name": "nervehq-tmp",
-  "version": "0.1.0",
+  "name": "cortex",
+  "version": "0.2.1",
   "private": true,
+  "description": "Cortex — Agentic OS control plane (desktop + local web)",
+  "author": "Cortex",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "desktop": "electron .",
+    "desktop:dev": "concurrently -k -n next,electron -c cyan,magenta \"next dev -H 127.0.0.1 -p 3000\" \"wait-on http://127.0.0.1:3000 && electron .\"",
+    "desktop:build": "npm run build && node scripts/prepare-standalone.cjs && electron-builder --mac",
+    "desktop:pack": "npm run desktop:build",
+    "jarvis:proxy": "node scripts/jarvis-chat-proxy.mjs"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "lucide-react": "^1.27.0",
+    "nanoid": "^6.0.0",
     "next": "16.2.12",
+    "openai": "^7.1.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "tailwind-merge": "^3.6.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.4",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "ai.cortex.os",
+    "productName": "Cortex",
+    "copyright": "Copyright © Cortex",
+    "afterPack": "scripts/after-pack.cjs",
+    "directories": {
+      "output": "dist-desktop",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop-runtime",
+        "to": "standalone",
+        "filter": [
+          "**/*",
+          "!node_modules/**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Cortex uses the microphone for built-in voice-to-text when writing ideas and prompts.",
+        "NSSpeechRecognitionUsageDescription": "Cortex can use speech recognition for voice-to-text input."
+      },
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
+    "dmg": {
+      "title": "Cortex"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    }
   }
 }

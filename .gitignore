@@ -18,11 +18,17 @@
 /out/
 
 # production
-/build
+/dist-desktop
+/dist
+/desktop-runtime
+
+# electron build resources (icons) — keep tracked
+# /build is intentionally not ignored
 
 # misc
 .DS_Store
 *.pem
+*.log
 
 # debug
 npm-debug.log*
@@ -39,3 +45,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Cortex local state
+/data
