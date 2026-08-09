@@ -1299,118 +1299,169 @@ export async function probeLiveSearchProviders(): Promise<SearchProviderStatus[]
   return out;
 }
 
+/** Short in-memory cache so repeat asks don't re-hit the network. */
+const liveCache = new Map<string, { at: number; ctx: LiveContext }>();
+const LIVE_CACHE_TTL_MS = 45_000;
+
+function cacheGet(key: string): LiveContext | null {
+  const hit = liveCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > LIVE_CACHE_TTL_MS) {
+    liveCache.delete(key);
+    return null;
+  }
+  return hit.ctx;
+}
+
+function cacheSet(key: string, ctx: LiveContext) {
+  liveCache.set(key, { at: Date.now(), ctx });
+  // Bound memory
+  if (liveCache.size > 40) {
+    const oldest = [...liveCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) liveCache.delete(oldest[0]);
+  }
+}
+
 /**
  * Fetch live context for a chat turn.
- * Never throws.
- *   Weather → Open-Meteo first (real readings)
- *   General → RivalSearchMCP primary · Tavily · free RSS/DDG
+ * Tuned for speed:
+ *   Weather → Open-Meteo only (~1s)
+ *   General → fast free sources first (~2–6s), RivalSearch only if thin (~12s cap)
+ *   Tavily skipped while quota exceeded
  */
 export async function fetchLiveContext(
   prompt: string,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; fast?: boolean },
 ): Promise<LiveContext | null> {
   ensureSecretsLoaded();
   const query = prompt.trim().slice(0, 400);
   if (!query) return null;
   if (!opts?.force && !needsLiveData(query)) return null;
 
-  const notes: string[] = [];
+  const cacheKey = query.toLowerCase();
+  const cached = cacheGet(cacheKey);
+  if (cached?.hits.length) return cached;
 
-  // 0) WEATHER — Open-Meteo only (RivalSearch cannot return live temps for a place)
+  const notes: string[] = [];
+  const fast = opts?.fast !== false; // default fast path for chat
+
+  // 0) WEATHER — Open-Meteo only (RivalSearch cannot return live temps)
   if (isWeatherQuery(query)) {
     const weather = await searchOpenMeteoWeather(query);
     if (weather?.hits.length) {
-      return {
+      const ctx: LiveContext = {
         ...weather,
-        notes: ["Open-Meteo live weather (preferred for temperature/conditions)"],
-        block:
-          `Primary live source: Open-Meteo weather API.\n\n${weather.block}`,
+        notes: ["Open-Meteo live weather"],
+        block: `Primary live source: Open-Meteo weather API.\n\n${weather.block}`,
       };
+      cacheSet(cacheKey, ctx);
+      return ctx;
     }
-    // Do NOT fall through to RivalSearch for weather — it only returns site links
-    // and confuses the model into saying "no live weather".
-    const place = extractWeatherPlace(query);
     return {
       searched: true,
       query,
       provider: "open-meteo",
       hits: [],
-      notes: [
-        "Open-Meteo could not resolve this location. RivalSearch is not used for weather.",
-      ],
+      notes: ["Open-Meteo could not resolve this location"],
       block:
-        `Live weather lookup failed for "${place || query}". ` +
-        `Could not geocode that place via Open-Meteo. ` +
-        `Ask the user to restate the city (and state/country), e.g. "Las Vegas, Nevada" or "Tokyo, Japan". ` +
-        `Do not invent temperatures. Do not claim weather for a different country.`,
+        `Live weather lookup failed for "${extractWeatherPlace(query) || query}". ` +
+        `Could not geocode that place. Ask for city + state/country. Do not invent temperatures.`,
     };
   }
 
-  // 1) PRIMARY — RivalSearchMCP (local, free, multi-engine) — non-weather only
-  const rival = await searchRivalSearch(query, {
-    mode: NEWS_SHAPED.test(query) ? "auto" : "auto",
-    timeoutMs: 50_000,
-  });
-  if (rival?.hits.length) {
-    const prefix = "Primary live source: RivalSearchMCP.";
-    return {
-      ...rival,
-      notes: [...(rival.notes || []), ...notes],
-      block: notes.length
-        ? `${notes.join(" · ")}\n\n${prefix}\n\n${rival.block}`
-        : `${prefix}\n\n${rival.block}`,
-    };
-  }
-  if (getRivalSearchLastError()) {
-    notes.push(`RivalSearch unavailable (${getRivalSearchLastError()})`);
-  } else {
-    notes.push("RivalSearch returned no hits");
-  }
-
-  // 2) Optional paid secondary
-  const tavily = await searchTavily(query);
-  if (tavily?.hits.length) {
-    if (notes.length) {
-      tavily.block = `${notes.join(" · ")}\n\n${tavily.block}`;
-      tavily.notes = notes;
-    }
-    return tavily;
-  }
-  if (tavilyLastError === "quota_exceeded") {
-    notes.push("Tavily quota exceeded");
-  } else if (tavilyLastError && tavilyLastError !== "no_key") {
-    notes.push(`Tavily unavailable (${tavilyLastError})`);
-  }
-
-  // 3) Parallel free last-resort sources
-  const free = await Promise.all([
+  // 1) FAST free sources in parallel (usually enough for news / facts)
+  const freeResults = await Promise.all([
     searchGoogleNews(query),
     searchHeadlineFeeds(query),
     searchDuckDuckGo(query),
-    searchDuckDuckGoHtml(query),
     searchWikipedia(query),
+    // HTML scrape is slower — only if not in fast mode later
   ]);
 
-  const mergedHits: LiveSearchHit[] = [];
-  const providers: string[] = [];
-  for (const r of free) {
+  const freeHits: LiveSearchHit[] = [];
+  const freeProviders: string[] = [];
+  for (const r of freeResults) {
     if (r?.hits?.length) {
-      providers.push(r.provider || "free");
-      mergedHits.push(...r.hits);
+      freeProviders.push(r.provider || "free");
+      freeHits.push(...r.hits);
+    }
+  }
+  const freePacked = pack(
+    query,
+    freeProviders.length ? freeProviders.join("+") : "none",
+    freeHits,
+  );
+
+  // Good enough free result → return immediately (skip slow RivalSearch)
+  const freeGoodEnough =
+    freePacked &&
+    freePacked.hits.length >= (NEWS_SHAPED.test(query) ? 2 : 3);
+
+  if (freeGoodEnough && freePacked) {
+    freePacked.block = `Live source: free search (${freePacked.provider}).\n\n${freePacked.block}`;
+    cacheSet(cacheKey, freePacked);
+    return freePacked;
+  }
+
+  // 2) RivalSearch with tight timeout (primary quality, not blocking forever)
+  const rivalTimeout = fast ? 12_000 : 25_000;
+  const rival = await searchRivalSearch(query, {
+    mode: NEWS_SHAPED.test(query) ? "news" : "auto",
+    timeoutMs: rivalTimeout,
+  });
+  if (rival?.hits.length) {
+    // Prefer rival if it has more hits; otherwise merge with free
+    const mergedHits = pack(
+      query,
+      `rival-search+${freePacked?.provider || "free"}`,
+      [...rival.hits, ...(freePacked?.hits || [])],
+      notes,
+    );
+    const ctx = mergedHits || rival;
+    ctx.block = `Primary live source: RivalSearchMCP.\n\n${ctx.block}`;
+    cacheSet(cacheKey, ctx);
+    return ctx;
+  }
+  if (getRivalSearchLastError()) {
+    notes.push(`RivalSearch: ${getRivalSearchLastError()}`);
+  }
+
+  // 3) Tavily only if not known-quota-exceeded
+  if (tavilyLastError !== "quota_exceeded") {
+    const tavily = await searchTavily(query);
+    if (tavily?.hits.length) {
+      if (notes.length) {
+        tavily.block = `${notes.join(" · ")}\n\n${tavily.block}`;
+      }
+      cacheSet(cacheKey, tavily);
+      return tavily;
+    }
+  } else {
+    notes.push("Tavily skipped (quota exceeded)");
+  }
+
+  // 4) Slower HTML scrape last resort
+  const html = await searchDuckDuckGoHtml(query);
+  if (html?.hits.length || freePacked?.hits.length) {
+    const merged = pack(
+      query,
+      [freePacked?.provider, html?.provider].filter(Boolean).join("+") || "free",
+      [...(freePacked?.hits || []), ...(html?.hits || [])],
+      notes,
+    );
+    if (merged) {
+      if (notes.length) merged.block = `${notes.join(" · ")}\n\n${merged.block}`;
+      cacheSet(cacheKey, merged);
+      return merged;
     }
   }
 
-  const merged = pack(
-    query,
-    providers.length ? providers.join("+") : "none",
-    mergedHits,
-    notes,
-  );
-  if (merged) {
+  if (freePacked?.hits.length) {
     if (notes.length) {
-      merged.block = `${notes.join(" · ")}\n\n${merged.block}`;
+      freePacked.block = `${notes.join(" · ")}\n\n${freePacked.block}`;
     }
-    return merged;
+    cacheSet(cacheKey, freePacked);
+    return freePacked;
   }
 
   return {

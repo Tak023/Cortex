@@ -139,12 +139,7 @@ export async function POST(req: Request) {
         }))
     : undefined;
 
-  // Soft health probe — do not block chat if the probe is wrong but the model answers
-  let health = await checkAgentHealth(agentId).catch(() => ({
-    ok: false,
-    backend: "jarvis",
-    detail: "Health probe failed",
-  }));
+// Skip pre-chat health probe (was adding multi-second delay before every turn)
   updateAgent(agentId, {
     status: "busy",
     lastSeenAt: new Date().toISOString(),
@@ -158,34 +153,31 @@ export async function POST(req: Request) {
     history,
     voiceMode,
     systemPrompt: body.systemPrompt,
-    // Voice stays snappy; typed gets room for researched answers
-    maxTokens: voiceMode ? 600 : 1400,
+    // Shorter answers → faster generation (voice stays tight)
+    maxTokens: voiceMode ? 400 : 800,
     extras: {
       ...(body.jarvisAgent ? { jarvisAgent: body.jarvisAgent } : {}),
       ...(voiceMode && !body.jarvisAgent ? { jarvisAgent: "simple" } : {}),
     },
   });
 
-  // Refresh health after a successful turn so UI status matches reality
-  if (result.ok) {
-    health = await checkAgentHealth(agentId).catch(() => health);
-  }
-
   updateAgent(agentId, {
     status: result.ok ? "idle" : "error",
     lastSeenAt: new Date().toISOString(),
   });
+
+  // Non-blocking health refresh after the turn (don't await)
+  void checkAgentHealth(agentId).catch(() => undefined);
 
   if (!result.ok) {
     return NextResponse.json(
       {
         error: result.error || "OpenJarvis invoke failed",
         result,
-        health,
       },
       { status: 502 },
     );
   }
 
-  return NextResponse.json({ result, health });
+  return NextResponse.json({ result });
 }

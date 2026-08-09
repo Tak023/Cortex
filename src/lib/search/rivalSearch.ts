@@ -89,7 +89,7 @@ export async function searchRivalSearch(
 
   const uv = resolveUvCommand();
   const mode = opts?.mode || "auto";
-  const timeoutMs = opts?.timeoutMs ?? 45_000;
+  const timeoutMs = opts?.timeoutMs ?? 12_000;
   // Pass absolute path so scripts/ copy works outside the package tree
   const bridgeArg = bridge;
 

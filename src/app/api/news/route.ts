@@ -15,10 +15,9 @@ const TTL_MS = 5 * 60 * 1000;
 
 const VALID: Array<NewsCategory | "all"> = [
   "all",
-  "top",
-  "world",
+  "priority",
+  "ai",
   "tech",
-  "business",
 ];
 
 export async function GET(req: NextRequest) {
@@ -29,10 +28,10 @@ export async function GET(req: NextRequest) {
   const category = (
     VALID.includes(rawCat as NewsCategory | "all") ? rawCat : "all"
   ) as NewsCategory | "all";
-  const limit = Number(sp.get("limit") || "24") || 24;
+  const limit = Number(sp.get("limit") || "28") || 28;
   const force = sp.get("refresh") === "1";
 
-  const key = `${category}:${limit}`;
+  const key = `ai-tech:${category}:${limit}`;
   const hit = cache.get(key);
   if (!force && hit && Date.now() - hit.at < TTL_MS) {
     return NextResponse.json({

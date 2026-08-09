@@ -21,6 +21,7 @@ type NewsResponse = {
   fetchedAt: string;
   providers: string[];
   category: NewsCategory | "all";
+  focus?: string;
   cached?: boolean;
   error?: string;
 };
@@ -110,19 +111,17 @@ export function NewsPanel({ className, onAsk }: Props) {
         "flex h-full min-h-0 w-full flex-col border-l border-border-subtle bg-panel/40",
         className,
       )}
-      aria-label="Top news feeds"
+      aria-label="AI technology news feeds"
     >
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <Newspaper className="h-4 w-4 shrink-0 text-sky-300" />
           <div className="min-w-0">
             <div className="text-xs font-semibold tracking-[0.14em] uppercase text-foreground/90">
-              News feeds
+              AI · Tech news
             </div>
             <div className="truncate text-[10px] text-muted">
-              {data?.providers?.length
-                ? data.providers.slice(0, 4).join(" · ")
-                : "Live headlines"}
+              Priority: Anthropic · Claude · Grok · Codex · ChatGPT · Hermes
               {data?.fetchedAt ? (
                 <span className="text-muted/70">
                   {" "}
@@ -198,7 +197,7 @@ export function NewsPanel({ className, onAsk }: Props) {
                     "hover:border-border/80 hover:bg-panel-elevated/70",
                   )}
                 >
-                  <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+                  <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
                     <span className="truncate text-sky-300/80">{item.source}</span>
                     {item.publishedAt ? (
                       <>
@@ -206,7 +205,24 @@ export function NewsPanel({ className, onAsk }: Props) {
                         <span>{formatRelative(item.publishedAt)}</span>
                       </>
                     ) : null}
+                    {(item.priority ?? 0) >= 75 ? (
+                      <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-violet-200 ring-1 ring-violet-400/30">
+                        Priority
+                      </span>
+                    ) : null}
                   </div>
+                  {item.tags?.length ? (
+                    <div className="mb-1 flex flex-wrap gap-1">
+                      {item.tags.slice(0, 3).map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded border border-border-subtle px-1.5 py-0.5 text-[9px] font-medium text-sky-200/90"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <a
                     href={item.url}
                     target="_blank"

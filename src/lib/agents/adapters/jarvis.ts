@@ -596,7 +596,10 @@ async function enrichChatRequest(
 
 /**
  * Prefer Grok for live questions (hybrid) or always (grok mode).
- * Still grounds answers with Tavily/etc. injected context.
+ *
+ * Speed: when we already injected live hits (Open-Meteo / search), prefer the
+ * local model first — Grok round-trips often fail then fall back, doubling
+ * latency. Use Grok when we want live data but search came back empty.
  */
 function shouldPreferGrok(
   mode: AppSettings["jarvisChatMode"],
@@ -606,8 +609,10 @@ function shouldPreferGrok(
   if (!isAiConfigured()) return false;
   if (mode === "grok") return true;
   if (mode === "local") return false;
-  // hybrid: Grok when the turn needs (or has) current data
-  return wantsLive || hasLiveHits;
+  // hybrid + already grounded → local is faster and sufficient
+  if (hasLiveHits) return false;
+  // hybrid + needs live but no hits → try Grok's knowledge
+  return wantsLive;
 }
 
 async function invokeGrokChat(
@@ -627,7 +632,8 @@ async function invokeGrokChat(
   const result = await chatWithGrok({
     messages,
     temperature: req.temperature ?? (isChat ? 0.35 : 0.7),
-    maxTokens: req.maxTokens ?? (req.voiceMode ? 400 : isChat ? 1024 : 2048),
+    // Keep chat answers shorter → lower latency on Grok
+    maxTokens: req.maxTokens ?? (req.voiceMode ? 320 : isChat ? 700 : 2048),
   });
   if (isGarbageModelContent(result.content)) {
     throw new Error(
@@ -786,11 +792,15 @@ async function invokeDirectChat(
     model: modelId,
     messages,
     temperature: req.temperature ?? (isChat ? 0.35 : 0.7),
-    max_tokens: req.maxTokens ?? (req.voiceMode ? 400 : isChat ? 1024 : 2048),
+    max_tokens: req.maxTokens ?? (req.voiceMode ? 320 : isChat ? 700 : 2048),
     stream: false,
   });
 
   let usedModel = model;
+  // Cap chat completion wait so a hung backend fails over faster
+  const chatTimeout = isChat
+    ? Math.min(timeoutMs, 45_000)
+    : timeoutMs;
   let res = await fetchWithTimeout(
     `${root}/v1/chat/completions`,
     {
@@ -801,7 +811,7 @@ async function invokeDirectChat(
       },
       body: JSON.stringify(buildBody(usedModel)),
     },
-    timeoutMs,
+    chatTimeout,
   );
 
   // If preferred model is missing, auto-pick and retry once
