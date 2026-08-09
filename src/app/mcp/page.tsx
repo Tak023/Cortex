@@ -30,6 +30,9 @@ type McpServerRow = {
     docsUrl?: string;
   }>;
   launch: { command: string; args: string[]; envKeys: string[] };
+  /** RivalSearchMCP local clone */
+  installPath?: string;
+  installFound?: boolean;
 };
 
 export default function McpPage() {
@@ -128,7 +131,11 @@ export default function McpPage() {
                         </Badge>
                       ) : s.state.enabled ? (
                         <Badge className="bg-amber-500/15 text-amber-200 border-amber-500/25">
-                          needs key
+                          {s.id === "rival-search" && s.installFound === false
+                            ? "needs install"
+                            : s.envStatus.some((e) => e.required && !e.present)
+                              ? "needs key"
+                              : "not ready"}
                         </Badge>
                       ) : (
                         <Badge className="bg-white/5 text-muted border-border">
@@ -139,6 +146,13 @@ export default function McpPage() {
                     <p className="mt-1 text-[12px] text-muted leading-snug">
                       {s.description}
                     </p>
+                    {s.id === "rival-search" && s.installPath ? (
+                      <p className="mt-1 font-mono text-[10px] text-muted/80 break-all">
+                        {s.installFound === false
+                          ? `Clone missing — expected ${s.installPath}`
+                          : `Local: ${s.installPath}`}
+                      </p>
+                    ) : null}
                   </div>
                   <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted">
                     <input

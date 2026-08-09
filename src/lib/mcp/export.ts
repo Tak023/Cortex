@@ -36,7 +36,14 @@ export function buildMcpClientConfig(states: McpServerState[]): {
       env[e.key] = override || `\${${e.key}}`;
     }
 
-    mcpServers[def.id] = {
+    // Hermes / Cursor export keys (match ~/.hermes/config.yaml where applicable)
+    const exportKey =
+      def.id === "rival-search"
+        ? "RivalSearchMCP"
+        : def.id === "heventure-search"
+          ? "web-search"
+          : def.id;
+    mcpServers[exportKey] = {
       command: launch.command,
       args: launch.args,
       ...(Object.keys(env).length ? { env } : {}),

@@ -6,6 +6,11 @@ import {
   type AgentChatMessage,
 } from "@/lib/agents/adapters";
 import { isAiConfigured, getGrokChatModel } from "@/lib/ai/client";
+import { ensureSecretsLoaded } from "@/lib/env/secrets";
+import {
+  getTavilyLastError,
+  probeLiveSearchProviders,
+} from "@/lib/search/realtime";
 import { getSettings, updateAgent } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +31,7 @@ export const runtime = "nodejs";
  * }
  */
 export async function GET() {
+  ensureSecretsLoaded();
   const settings = getSettings();
   const probes = await probeLiveIntegrations();
 
@@ -42,7 +48,16 @@ export async function GET() {
     probes.find((p) => p.agentId === "agent-jarvis")?.health ||
     probes[0]?.health;
   const grokReady = isAiConfigured();
-  const tavilyReady = Boolean(process.env.TAVILY_API_KEY?.trim());
+  const tavilyKey = Boolean(process.env.TAVILY_API_KEY?.trim());
+  const searchProviders = await probeLiveSearchProviders().catch(() => []);
+  const rivalStatus = searchProviders.find((p) => p.id === "rival-search");
+  const tavilyStatus = searchProviders.find((p) => p.id === "tavily");
+  const freeReady = searchProviders.some(
+    (p) => p.id !== "tavily" && p.id !== "rival-search" && p.ready,
+  );
+  const rivalReady = Boolean(rivalStatus?.ready);
+  const tavilyReady = Boolean(tavilyStatus?.ready);
+  const liveSearchReady = rivalReady || tavilyReady || freeReady;
 
   return NextResponse.json({
     enabled: settings.jarvisEnabled !== false,
@@ -59,7 +74,18 @@ export async function GET() {
       mode: settings.jarvisChatMode || "hybrid",
       grokReady,
       grokModel: grokReady ? getGrokChatModel() : null,
+      /** True only when Tavily actually returns results (not just key present). */
+      primarySearch: "rival-search",
+      rivalSearchReady: rivalReady,
+      rivalSearchDetail: rivalStatus?.detail || "not configured",
       tavilyReady,
+      tavilyKeyConfigured: tavilyKey,
+      tavilyDetail:
+        tavilyStatus?.detail ||
+        (tavilyKey ? getTavilyLastError() || "unknown" : "no_key"),
+      liveSearchReady,
+      freeSearchReady: freeReady,
+      searchProviders,
       localHint: "LM Studio local server :1234 (Hermes 3 8B Abliterated)",
     },
     health: primary ?? {
@@ -76,6 +102,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  ensureSecretsLoaded();
   const body = (await req.json().catch(() => ({}))) as {
     prompt?: string;
     agentId?: string;

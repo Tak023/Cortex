@@ -16,6 +16,7 @@ const nextConfig: NextConfig = {
     "onnxruntime-node",
     "onnxruntime-common",
     "sharp",
+    "node-pty",
   ],
 };
 

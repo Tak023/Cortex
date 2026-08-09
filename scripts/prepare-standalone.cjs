@@ -95,10 +95,61 @@ if (fs.existsSync(publicSrc)) {
   copyDir(publicSrc, path.join(standalone, "public"));
 }
 
+// Next file-tracing sometimes pulls the whole project (and previous builds)
+// into standalone. Strip recursive / non-runtime junk before packaging.
+const JUNK = [
+  "desktop-runtime",
+  "dist-desktop",
+  "dist",
+  "node_modules/.cache",
+  "node_modules/@huggingface/transformers/.cache",
+  ".git",
+  "Resources",
+  "build",
+  "electron",
+  "scripts",
+  "src", // only needed at build time; runtime uses .next
+  "data",
+  "main.cjs",
+  "package-lock.json",
+  "tsconfig.tsbuildinfo",
+  "tsconfig.json",
+  "next.config.ts",
+  "next.config.js",
+  "README.md",
+  "Agents.md",
+  "AGENTS.md",
+  "Claude.md",
+  "CLAUDE.md",
+  ".env.example",
+  ".env.local",
+  ".gitignore",
+  "eslint.config.mjs",
+  "postcss.config.mjs",
+  // Duplicate of top-level node_modules (~390MB+); server resolves via NODE_PATH
+  path.join(".next", "node_modules"),
+];
+for (const rel of JUNK) {
+  const p = path.join(standalone, rel);
+  if (fs.existsSync(p)) {
+    console.log("Stripping junk from standalone:", rel);
+    rmrf(p);
+  }
+}
+
 // Stage a clean runtime folder for electron-builder extraResources
 console.log("Staging desktop-runtime/ …");
 rmrf(runtime);
 copyDir(standalone, runtime);
+
+// Never re-include nested packaging dirs inside the staged runtime
+for (const rel of ["desktop-runtime", "dist-desktop", "dist"]) {
+  const p = path.join(runtime, rel);
+  if (fs.existsSync(p)) {
+    console.log("Stripping nested", rel, "from desktop-runtime");
+    rmrf(p);
+  }
+}
 
 // Double-check critical modules
 const checks = [

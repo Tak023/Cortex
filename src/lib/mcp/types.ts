@@ -9,8 +9,9 @@ export type McpServerId =
   | "firecrawl"
   | "playwright"
   | "tavily"
-  | "brave-search"
-  | "github";
+  | "github"
+  | "rival-search"
+  | "heventure-search";
 
 export interface McpEnvVar {
   key: string;

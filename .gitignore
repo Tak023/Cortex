@@ -48,3 +48,11 @@ next-env.d.ts
 
 # Cortex local state
 /data
+
+# External clones / local installs (not part of the app source tree)
+/RivalSearchMCP/
+/hermes-second-brain/
+
+# Optional local Python venvs
+.venv/
+**/.venv/

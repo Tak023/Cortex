@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ExternalLink,
   Loader2,
   Mic,
   MicOff,
@@ -16,6 +15,7 @@ import {
   JarvisAvatar,
   jarvisMoodFromState,
 } from "@/components/jarvis/JarvisAvatar";
+import { NewsPanel } from "@/components/jarvis/NewsPanel";
 import { cn } from "@/lib/utils";
 import {
   useSpeechToText,
@@ -35,6 +35,10 @@ type JarvisStatus = {
     grokReady?: boolean;
     grokModel?: string | null;
     tavilyReady?: boolean;
+    tavilyKeyConfigured?: boolean;
+    tavilyDetail?: string;
+    liveSearchReady?: boolean;
+    freeSearchReady?: boolean;
     localHint?: string;
   };
   health?: {
@@ -201,7 +205,7 @@ export default function JarvisPage() {
         if (
           /^\s*\{[\s\S]*"name"\s*:/.test(reply) ||
           /Using Tavily for web search/i.test(reply) ||
-          (/tavily_search|brave_search/i.test(reply) &&
+          (/tavily_search|firecrawl/i.test(reply) &&
             /\{[\s\S]*"name"\s*:/.test(reply)) ||
           /\*\*Actionable Steps:\*\*|\[insert president's name\]/i.test(
             reply,
@@ -319,6 +323,15 @@ export default function JarvisPage() {
     speaking: tts.isSpeaking,
   });
 
+  const askAboutHeadline = useCallback(
+    (headline: string, url?: string) => {
+      if (busyRef.current) return;
+      const body = url ? `${headline}\n\nSource: ${url}` : headline;
+      void sendTurn(body);
+    },
+    [sendTurn],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Compact top bar — orb is the focus */}
@@ -383,184 +396,209 @@ export default function JarvisPage() {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        {/* Hero orb stage */}
-        <section
-          className={cn(
-            "relative flex flex-col items-center justify-center px-4 pb-2 pt-4 sm:px-8 sm:pt-6",
-            "bg-[radial-gradient(ellipse_80%_70%_at_50%_45%,rgba(14,165,233,0.12),transparent_70%)]",
-          )}
-        >
-          <JarvisAvatar
-            mood={avatarMood}
-            size="hero"
-            showLabel
-            onClick={toggleTalk}
-            disabled={
-              busy || stt.status === "processing" || !stt.builtinAvailable
-            }
-            className="w-full"
-          />
-
-          <div className="mt-1 flex max-w-xl flex-col items-center gap-2 px-2 text-center">
-            <p className="text-sm font-medium text-foreground/90">
-              {talkLabel.title}
-            </p>
-            <p className="text-[12px] text-muted">{talkLabel.hint}</p>
-            {micError && (
-              <p className="text-[11px] text-amber-300/90">{micError}</p>
+      {/* Main stage + right news rail */}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+          {/* Hero orb stage */}
+          <section
+            className={cn(
+              "relative flex flex-col items-center justify-center px-4 pb-2 pt-4 sm:px-8 sm:pt-6",
+              "bg-[radial-gradient(ellipse_80%_70%_at_50%_45%,rgba(14,165,233,0.12),transparent_70%)]",
             )}
-            <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={stt.status === "listening" ? "danger" : "primary"}
-                disabled={
-                  busy || stt.status === "processing" || !stt.builtinAvailable
-                }
-                onClick={toggleTalk}
-              >
-                {stt.status === "listening" ? (
-                  <>
-                    <MicOff className="h-3.5 w-3.5" /> Stop listening
-                  </>
-                ) : stt.status === "processing" || busy ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Working…
-                  </>
-                ) : (
-                  <>
-                    <Mic className="h-3.5 w-3.5" /> Talk
-                  </>
-                )}
-              </Button>
-              {tts.isSpeaking && (
+          >
+            <JarvisAvatar
+              mood={avatarMood}
+              size="hero"
+              showLabel
+              onClick={toggleTalk}
+              disabled={
+                busy || stt.status === "processing" || !stt.builtinAvailable
+              }
+              className="w-full"
+            />
+
+            <div className="mt-1 flex max-w-xl flex-col items-center gap-2 px-2 text-center">
+              <p className="text-sm font-medium text-foreground/90">
+                {talkLabel.title}
+              </p>
+              <p className="text-[12px] text-muted">{talkLabel.hint}</p>
+              {micError && (
+                <p className="text-[11px] text-amber-300/90">{micError}</p>
+              )}
+              <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
                 <Button
                   type="button"
                   size="sm"
-                  variant="secondary"
-                  onClick={() => tts.stop()}
+                  variant={stt.status === "listening" ? "danger" : "primary"}
+                  disabled={
+                    busy || stt.status === "processing" || !stt.builtinAvailable
+                  }
+                  onClick={toggleTalk}
                 >
-                  <Square className="h-3 w-3" />
-                  Stop speaking
+                  {stt.status === "listening" ? (
+                    <>
+                      <MicOff className="h-3.5 w-3.5" /> Stop listening
+                    </>
+                  ) : stt.status === "processing" || busy ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Working…
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="h-3.5 w-3.5" /> Talk
+                    </>
+                  )}
                 </Button>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* Conversation strip under the orb */}
-        <section className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 pb-6 pt-2 sm:px-6">
-          <div className="max-h-[200px] space-y-2 overflow-y-auto rounded-xl border border-border/60 bg-panel/40 p-3 sm:max-h-[240px]">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={cn(
-                  "rounded-lg px-3 py-2 text-sm leading-relaxed",
-                  m.role === "user" &&
-                    "ml-10 bg-accent-soft border border-blue-500/15",
-                  m.role === "assistant" &&
-                    "mr-6 bg-panel-elevated/80 border border-border",
-                  m.role === "system" &&
-                    "text-[11px] text-muted border border-border-subtle",
+                {tts.isSpeaking && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => tts.stop()}
+                  >
+                    <Square className="h-3 w-3" />
+                    Stop speaking
+                  </Button>
                 )}
-              >
-                {m.role === "assistant" ? (
-                  <div className="mb-1 flex items-center gap-2">
-                    <JarvisAvatar
-                      mood={
-                        tts.isSpeaking &&
-                        m.id === messages[messages.length - 1]?.id
-                          ? "speaking"
-                          : "idle"
-                      }
-                      size="sm"
-                      showLabel={false}
-                    />
-                    <span className="text-[10px] uppercase tracking-wider text-muted">
-                      Jarvis
-                      {m.backend ? (
-                        <span className="ml-1.5 font-normal normal-case tracking-normal text-muted/80">
-                          · {formatBackendLabel(m.backend)}
-                          {m.model ? ` (${shortModel(m.model)})` : ""}
-                        </span>
-                      ) : null}
-                    </span>
-                  </div>
-                ) : m.role === "user" ? (
-                  <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">
-                    You
-                  </div>
-                ) : null}
-                <div className="whitespace-pre-wrap">{m.content}</div>
               </div>
-            ))}
-            {busy && (
-              <div className="flex items-center gap-2 text-xs text-muted">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Forming a response…
-              </div>
-            )}
-            <div ref={bottomRef} />
-          </div>
+            </div>
+          </section>
 
-          <div className="flex gap-2">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void sendTurn(prompt);
-                }
-              }}
-              rows={2}
-              placeholder="Type a message… Enter to send"
-              disabled={busy}
-              className="min-h-[52px] flex-1 resize-y rounded-xl border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-sky-500/40 disabled:opacity-50"
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="primary"
-              className="self-end"
-              disabled={busy || !prompt.trim()}
-              onClick={() => void sendTurn(prompt)}
-            >
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Send className="h-3.5 w-3.5" />
+          {/* Conversation strip under the orb */}
+          <section className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 pb-6 pt-2 sm:px-6">
+            <div className="max-h-[200px] space-y-2 overflow-y-auto rounded-xl border border-border/60 bg-panel/40 p-3 sm:max-h-[240px]">
+              {messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={cn(
+                    "rounded-lg px-3 py-2 text-sm leading-relaxed",
+                    m.role === "user" &&
+                      "ml-10 bg-accent-soft border border-blue-500/15",
+                    m.role === "assistant" &&
+                      "mr-6 bg-panel-elevated/80 border border-border",
+                    m.role === "system" &&
+                      "text-[11px] text-muted border border-border-subtle",
+                  )}
+                >
+                  {m.role === "assistant" ? (
+                    <div className="mb-1 flex items-center gap-2">
+                      <JarvisAvatar
+                        mood={
+                          tts.isSpeaking &&
+                          m.id === messages[messages.length - 1]?.id
+                            ? "speaking"
+                            : "idle"
+                        }
+                        size="sm"
+                        showLabel={false}
+                      />
+                      <span className="text-[10px] uppercase tracking-wider text-muted">
+                        Jarvis
+                        {m.backend ? (
+                          <span className="ml-1.5 font-normal normal-case tracking-normal text-muted/80">
+                            · {formatBackendLabel(m.backend)}
+                            {m.model ? ` (${shortModel(m.model)})` : ""}
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                  ) : m.role === "user" ? (
+                    <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">
+                      You
+                    </div>
+                  ) : null}
+                  <div className="whitespace-pre-wrap">{m.content}</div>
+                </div>
+              ))}
+              {busy && (
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Forming a response…
+                </div>
               )}
-              Send
-            </Button>
-          </div>
+              <div ref={bottomRef} />
+            </div>
 
-          {!online && (
-            <p className="text-[11px] text-amber-300/90">
-              No chat backend online. Load{" "}
-              <strong>Hermes 3 Llama 3.1 8B Abliterated</strong> in LM Studio
-              (local server port 1234) and/or set{" "}
-              <code className="text-foreground/80">XAI_API_KEY</code> for Grok
-              hybrid. Live search uses{" "}
-              <code className="text-foreground/80">TAVILY_API_KEY</code>
-              {status?.hybrid?.tavilyReady ? " (configured)" : ""}.
-            </p>
-          )}
-          {online && status?.hybrid && (
-            <p className="text-[11px] text-muted">
-              Hybrid chat: LM Studio for private turns
-              {status.hybrid.grokReady
-                ? `; Grok (${status.hybrid.grokModel || "xAI"}) for live data`
-                : "; add XAI_API_KEY for Grok live answers"}
-              {status.hybrid.tavilyReady
-                ? " · Tavily search on"
-                : " · Tavily optional"}
-              .
-            </p>
-          )}
-        </section>
+            <div className="flex gap-2">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendTurn(prompt);
+                  }
+                }}
+                rows={2}
+                placeholder="Type a message… Enter to send"
+                disabled={busy}
+                className="min-h-[52px] flex-1 resize-y rounded-xl border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-sky-500/40 disabled:opacity-50"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                className="self-end"
+                disabled={busy || !prompt.trim()}
+                onClick={() => void sendTurn(prompt)}
+              >
+                {busy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+                Send
+              </Button>
+            </div>
+
+            {!online && (
+              <p className="text-[11px] text-amber-300/90">
+                No chat backend online. Load{" "}
+                <strong>Hermes 3 Llama 3.1 8B Abliterated</strong> in LM Studio
+                (local server port 1234) and/or set{" "}
+                <code className="text-foreground/80">XAI_API_KEY</code> for Grok
+                hybrid. Live search uses free sources (Google News · DDG · Wiki)
+                and optional{" "}
+                <code className="text-foreground/80">TAVILY_API_KEY</code>
+                {status?.hybrid?.tavilyKeyConfigured
+                  ? status.hybrid.tavilyReady
+                    ? " (ready)"
+                    : " (quota/unavailable — free search still works)"
+                  : ""}
+                .
+              </p>
+            )}
+            {online && status?.hybrid && (
+              <p className="text-[11px] text-muted">
+                Hybrid chat: LM Studio for private turns
+                {status.hybrid.grokReady
+                  ? `; Grok (${status.hybrid.grokModel || "xAI"}) for live data`
+                  : "; add XAI_API_KEY for Grok live answers"}
+                {status.hybrid.liveSearchReady
+                  ? " · Live search: RivalSearchMCP (primary)"
+                  : " · Live search offline"}
+                {status.hybrid.tavilyKeyConfigured
+                  ? status.hybrid.tavilyReady
+                    ? " · Tavily secondary OK"
+                    : ` · Tavily secondary off${status.hybrid.tavilyDetail ? ` (${status.hybrid.tavilyDetail})` : ""}`
+                  : ""}
+                .
+              </p>
+            )}
+          </section>
+        </div>
+
+        {/* Right news panel — desktop rail; stacks under content on small screens via order */}
+        <NewsPanel
+          className="hidden w-[min(22rem,32vw)] shrink-0 lg:flex xl:w-96"
+          onAsk={askAboutHeadline}
+        />
+      </div>
+
+      {/* Mobile / tablet news strip under main content */}
+      <div className="max-h-[40vh] shrink-0 border-t border-border-subtle lg:hidden">
+        <NewsPanel onAsk={askAboutHeadline} />
       </div>
     </div>
   );
@@ -571,7 +609,7 @@ function hybridStatusLine(status: JarvisStatus | null): string {
   const bits = [
     status.hybrid.mode || "hybrid",
     status.hybrid.grokReady ? "Grok ready" : null,
-    status.hybrid.tavilyReady ? "Tavily on" : null,
+    status.hybrid.liveSearchReady ? "RivalSearch live" : null,
   ].filter(Boolean);
   return bits.join(" · ");
 }

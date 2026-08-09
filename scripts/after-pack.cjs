@@ -112,4 +112,38 @@ exports.default = async function afterPack(context) {
     throw new Error("afterPack: next package still missing after copy");
   }
   console.log("afterPack: next module present ✓");
+
+  // Next standalone NFT often strips node-pty prebuilds. Force a full copy from
+  // the project install (includes prebuilds + spawn-helper) for Electron PTY.
+  const fullPty = path.join(projectDir, "node_modules", "node-pty");
+  const destPty = path.join(destModules, "node-pty");
+  if (fs.existsSync(fullPty)) {
+    console.log("afterPack: installing full node-pty (prebuilds)…");
+    if (fs.existsSync(destPty)) {
+      fs.rmSync(destPty, { recursive: true, force: true });
+    }
+    copyDir(fullPty, destPty);
+    // spawn-helper must be executable
+    const prebuilds = path.join(destPty, "prebuilds");
+    if (fs.existsSync(prebuilds)) {
+      const walk = (dir) => {
+        for (const name of fs.readdirSync(dir)) {
+          const full = path.join(dir, name);
+          const st = fs.statSync(full);
+          if (st.isDirectory()) walk(full);
+          else if (name === "spawn-helper") {
+            try {
+              fs.chmodSync(full, 0o755);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      };
+      walk(prebuilds);
+    }
+    console.log("afterPack: node-pty present ✓");
+  } else {
+    console.warn("afterPack: project node_modules/node-pty missing");
+  }
 };

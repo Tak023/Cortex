@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 32 32" fill="none" role="img" aria-label="Hermes">
+  <defs><clipPath id="r"><rect width="32" height="32" rx="8"/></clipPath></defs>
+  <rect width="32" height="32" rx="8" fill="#0B0B0F"/>
+  <image href="/branding/agents/hermes.png" width="32" height="32" clip-path="url(#r)" preserveAspectRatio="xMidYMid slice"/>
+</svg>

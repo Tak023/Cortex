@@ -1,11 +1,138 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
 import type { McpServerDefinition, McpServerState } from "./types";
 import { secretPresent } from "../env/secrets";
+
+/**
+ * Local RivalSearchMCP install (no API key — stdio via uv).
+ * Override with RIVALSEARCH_MCP_DIR if the clone lives elsewhere.
+ */
+export function resolveRivalSearchDir(): string {
+  // Prefer the full local clone (with .venv) over a thin package copy.
+  const candidates = [
+    process.env.RIVALSEARCH_MCP_DIR?.trim(),
+    process.env.CORTEX_PROJECT_ROOT
+      ? path.join(process.env.CORTEX_PROJECT_ROOT, "RivalSearchMCP")
+      : "",
+    path.join(os.homedir(), "Projects/Grok/Cortex/RivalSearchMCP"),
+    path.join(process.cwd(), "RivalSearchMCP"),
+    path.join(process.cwd(), "..", "RivalSearchMCP"),
+  ].filter(Boolean) as string[];
+
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(path.join(dir, "server.py"))) return dir;
+    } catch {
+      /* ignore */
+    }
+  }
+  return candidates[0] || path.join(process.cwd(), "RivalSearchMCP");
+}
+
+export function resolveUvCommand(): string {
+  const fromEnv = process.env.UV_BIN?.trim();
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  const candidates = [
+    path.join(os.homedir(), ".local/bin/uv"),
+    "/opt/homebrew/bin/uv",
+    "/usr/local/bin/uv",
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return "uv";
+}
+
+/** Resolve uvx (used by heventure-search-mcp and other uv tools). */
+export function resolveUvxCommand(): string {
+  const fromEnv = process.env.UVX_BIN?.trim();
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  const candidates = [
+    path.join(os.homedir(), ".local/bin/uvx"),
+    "/opt/homebrew/bin/uvx",
+    "/usr/local/bin/uvx",
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  // uvx ships with uv — fall back to sibling of uv
+  const uv = resolveUvCommand();
+  if (uv !== "uv") {
+    const sibling = path.join(path.dirname(uv), "uvx");
+    if (fs.existsSync(sibling)) return sibling;
+  }
+  return "uvx";
+}
+
+/** Matches Hermes mcp_servers.web-search launch. */
+export function heventureSearchArgs(): string[] {
+  return ["--with", "mcp<2", "heventure-search-mcp"];
+}
+
+export function rivalSearchInstalled(): boolean {
+  try {
+    return fs.existsSync(path.join(resolveRivalSearchDir(), "server.py"));
+  } catch {
+    return false;
+  }
+}
+
+function rivalSearchArgs(): string[] {
+  return [
+    "run",
+    "--directory",
+    resolveRivalSearchDir(),
+    "python",
+    "server.py",
+  ];
+}
 
 /**
  * Built-in MCP servers for Cortex + OpenJarvis.
  * Secrets are never hard-coded — only env var *names* are referenced.
  */
 export const MCP_CATALOG: McpServerDefinition[] = [
+  {
+    id: "rival-search",
+    name: "RivalSearchMCP",
+    description:
+      "Free multi-source research (web, news, social, academic, GitHub, docs) — local stdio via uv, no API key.",
+    homepage: "https://github.com/damionrashford/RivalSearchMCP",
+    transport: "stdio",
+    // command/args resolved at launch so paths stay correct on each machine
+    command: "uv",
+    args: [
+      "run",
+      "--directory",
+      "RivalSearchMCP",
+      "python",
+      "server.py",
+    ],
+    envVars: [],
+    tags: ["search", "research", "web", "news", "free"],
+  },
+  {
+    id: "heventure-search",
+    name: "Heventure Search",
+    description:
+      "Free API-key-free web search MCP (DuckDuckGo, Bing, Google) — same as Hermes web-search via uvx heventure-search-mcp.",
+    homepage: "https://github.com/HughesCuit/heventure-search-mcp",
+    transport: "stdio",
+    command: "uvx",
+    // Matches ~/.hermes/config.yaml mcp_servers.web-search
+    args: ["--with", "mcp<2", "heventure-search-mcp"],
+    envVars: [],
+    tags: ["search", "web", "free", "duckduckgo", "bing"],
+  },
   {
     id: "firecrawl",
     name: "Firecrawl",
@@ -61,28 +188,6 @@ export const MCP_CATALOG: McpServerDefinition[] = [
     tags: ["search", "research", "web"],
   },
   {
-    id: "brave-search",
-    name: "Brave Search",
-    description:
-      "Independent web & local search via Brave Search API (privacy-focused index).",
-    homepage:
-      "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-brave-search"],
-    envVars: [
-      {
-        key: "BRAVE_API_KEY",
-        label: "Brave Search API key",
-        required: true,
-        secret: true,
-        placeholder: "BSA…",
-        docsUrl: "https://brave.com/search/api/",
-      },
-    ],
-    tags: ["search", "web"],
-  },
-  {
     id: "github",
     name: "GitHub",
     description:
@@ -127,8 +232,7 @@ export const MCP_CATALOG: McpServerDefinition[] = [
 export function defaultMcpStates(): McpServerState[] {
   return MCP_CATALOG.map((s) => ({
     id: s.id,
-    // Brave requires a paid API key — off unless the user opts in
-    enabled: s.id !== "brave-search",
+    enabled: true,
     useDocker: s.id === "github",
   }));
 }
@@ -149,8 +253,20 @@ export function resolveMcpLaunch(
   state?: McpServerState,
 ): { command: string; args: string[]; env: Record<string, string> } {
   const useDocker = state?.useDocker && def.docker;
-  const command = useDocker ? "docker" : def.command;
-  const args = useDocker ? [...(def.docker?.args ?? def.args)] : [...def.args];
+  let command = useDocker ? "docker" : def.command;
+  let args = useDocker ? [...(def.docker?.args ?? def.args)] : [...def.args];
+
+  // Local RivalSearchMCP: absolute uv + project dir (matches Hermes config)
+  if (def.id === "rival-search" && !useDocker) {
+    command = resolveUvCommand();
+    args = rivalSearchArgs();
+  }
+
+  // Heventure Search: absolute uvx + package args (matches Hermes web-search)
+  if (def.id === "heventure-search" && !useDocker) {
+    command = resolveUvxCommand();
+    args = heventureSearchArgs();
+  }
 
   const env: Record<string, string> = {};
   for (const e of def.envVars) {

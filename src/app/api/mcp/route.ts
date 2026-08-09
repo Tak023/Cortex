@@ -3,6 +3,8 @@ import {
   MCP_CATALOG,
   envKeyPresent,
   resolveMcpLaunch,
+  resolveRivalSearchDir,
+  rivalSearchInstalled,
 } from "@/lib/mcp/catalog";
 import { buildMcpClientConfig, mcpToolsPromptSummary } from "@/lib/mcp/export";
 import type { McpServerState } from "@/lib/mcp/types";
@@ -32,17 +34,24 @@ export async function GET() {
       present: envKeyPresent(e.key) || Boolean(state.envOverrides?.[e.key]),
       docsUrl: e.docsUrl,
     }));
-    const ready =
-      state.enabled &&
+    const envReady =
+      !def.envVars.some((e) => e.required) ||
       def.envVars
         .filter((e) => e.required)
         .every(
           (e) =>
             envKeyPresent(e.key) || Boolean(state.envOverrides?.[e.key]),
         );
+    // RivalSearchMCP needs local clone + uv, not an API key
+    const installReady =
+      def.id !== "rival-search" || rivalSearchInstalled();
+    const ready = Boolean(state.enabled && envReady && installReady);
 
     return {
       ...def,
+      // Surface resolved launch paths in API (so UI shows real uv/dir)
+      command: launch.command,
+      args: launch.args,
       state,
       launch: {
         command: launch.command,
@@ -51,7 +60,19 @@ export async function GET() {
         envKeys: Object.keys(launch.env),
       },
       envStatus,
-      ready: def.envVars.some((e) => e.required) ? ready : state.enabled,
+      ready,
+      ...(def.id === "rival-search"
+        ? {
+            installPath: resolveRivalSearchDir(),
+            installFound: rivalSearchInstalled(),
+          }
+        : {}),
+      ...(def.id === "heventure-search"
+        ? {
+            installPath: "uvx heventure-search-mcp",
+            installFound: true,
+          }
+        : {}),
     };
   });
 

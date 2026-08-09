@@ -4,7 +4,7 @@
  *
  * OpenJarvis orchestrator often dumps fake tool-call JSON instead of answers.
  * This proxy sits on :8000 (or JARVIS_PROXY_PORT), injects live web context
- * (Tavily → Brave → DuckDuckGo), then answers via:
+ * (Tavily → DuckDuckGo), then answers via:
  *   1) Grok (live questions, when XAI_API_KEY set)
  *   2) LM Studio (:1234)
  *   3) Ollama (:11434)
@@ -135,7 +135,7 @@ function isGarbage(content) {
   const t = (content || "").trim();
   if (!t) return true;
   if (/Using Tavily for web search/i.test(t)) return true;
-  if (/tavily_search|brave_search|firecrawl/i.test(t) && /\{[\s\S]*"name"\s*:/.test(t))
+  if (/tavily_search|firecrawl/i.test(t) && /\{[\s\S]*"name"\s*:/.test(t))
     return true;
   if (/^\s*\{[\s\S]*"name"\s*:\s*"[^"]+"[\s\S]*\}\s*$/.test(t)) return true;
   if (/^\s*\{\s*"name"\s*:/.test(t)) return true;

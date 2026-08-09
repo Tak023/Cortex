@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "postinstall": "node scripts/fix-node-pty.cjs",
     "desktop": "electron .",
     "desktop:dev": "concurrently -k -n next,electron -c cyan,magenta \"next dev -H 127.0.0.1 -p 3000\" \"wait-on http://127.0.0.1:3000 && electron .\"",
     "desktop:build": "npm run build && node scripts/prepare-standalone.cjs && electron-builder --mac",
@@ -18,11 +19,15 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
     "lucide-react": "^1.27.0",
     "nanoid": "^6.0.0",
     "next": "16.2.12",
+    "node-pty": "^1.1.0",
     "openai": "^7.1.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -54,7 +59,13 @@
     },
     "files": [
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*",
+      "!**/node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "**/node-pty/**/*",
+      "**/*.node"
     ],
     "extraResources": [
       {
@@ -62,7 +73,12 @@
         "to": "standalone",
         "filter": [
           "**/*",
-          "!node_modules/**/*"
+          "!node_modules/**/*",
+          "!.next/node_modules/**/*",
+          "!desktop-runtime/**/*",
+          "!dist-desktop/**/*",
+          "!dist/**/*",
+          "!.git/**/*"
         ]
       }
     ],

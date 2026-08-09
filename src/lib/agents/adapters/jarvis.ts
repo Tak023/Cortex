@@ -511,6 +511,7 @@ Core rules:
 - Stay on topic. Do not invent tools, tool calls, APIs, or function names.
 - Never output JSON for tools (no {"name":...} payloads). Speak in plain language only.
 - Prefer Live web results and the current date/time block over training memory for anything that changes (news, prices, weather, scores, "today").
+- When the user message includes a LIVE DATA section, treat it as verified realtime ground truth (especially Open-Meteo weather readings). Never say you lack access if that section is present.
 - If live results are missing and you are unsure, say you cannot verify live data — do not invent current events.
 - Keep replies concise: a few sentences unless the user asks for depth.
 - Use conversation history only as context; prioritize the latest user message.`;
@@ -560,6 +561,7 @@ async function enrichChatRequest(
   const wantsLive = needsLiveData(req.prompt);
   let hasLiveHits = false;
   let liveProvider: string | undefined;
+  let prompt = req.prompt;
 
   try {
     const live = await fetchLiveContext(req.prompt, { force: wantsLive });
@@ -567,17 +569,25 @@ async function enrichChatRequest(
       context["Live web results"] = live.block;
       hasLiveHits = live.hits.length > 0;
       liveProvider = live.provider;
+      // Local models often ignore system context — pin live facts on the user turn.
+      if (hasLiveHits) {
+        prompt =
+          `${req.prompt}\n\n` +
+          `---\nLIVE DATA (authoritative for this answer — do not claim you lack realtime access):\n` +
+          `${live.block.slice(0, 3500)}\n---\n` +
+          `Answer the user using the LIVE DATA above. State numbers/conditions clearly.`;
+      }
     } else if (wantsLive) {
       context["Live web results"] =
         "Live search was attempted but returned nothing useful. " +
-        "Do not invent current headlines or prices.";
+        "Do not invent current headlines, weather, or prices.";
     }
   } catch {
     /* search is best-effort */
   }
 
   return {
-    req: { ...req, context },
+    req: { ...req, context, prompt },
     wantsLive,
     hasLiveHits,
     liveProvider,
@@ -586,7 +596,7 @@ async function enrichChatRequest(
 
 /**
  * Prefer Grok for live questions (hybrid) or always (grok mode).
- * Still grounds answers with Tavily/Brave/etc. injected context.
+ * Still grounds answers with Tavily/etc. injected context.
  */
 function shouldPreferGrok(
   mode: AppSettings["jarvisChatMode"],
@@ -698,7 +708,7 @@ function isGarbageModelContent(content: string): boolean {
   if (/^\s*\{\s*"name"\s*:/.test(t)) return true;
   if (/Using Tavily for web search/i.test(t)) return true;
   if (
-    /tavily_search|brave_search|firecrawl/i.test(t) &&
+    /tavily_search|firecrawl/i.test(t) &&
     /\{[\s\S]*"name"\s*:/.test(t)
   ) {
     return true;
@@ -1134,10 +1144,9 @@ export const jarvisAdapter: AgentAdapter = {
 
     const mode = resolveChatMode();
     const grokReady = isAiConfigured();
-    const tavilyReady = Boolean(process.env.TAVILY_API_KEY?.trim());
-    const searchNote = tavilyReady
-      ? "Tavily live search on"
-      : "Tavily key missing (DuckDuckGo/Wikipedia fallback)";
+    // RivalSearchMCP is primary live source; Tavily optional; RSS/DDG last resort
+    const searchNote =
+      "Live search: RivalSearchMCP primary · Tavily optional · RSS/DDG fallback";
 
     // Match chat invoke: probe LM Studio / Ollama / jarvis serve candidates
     // with short timeouts so "online" reflects any usable chat backend.

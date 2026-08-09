@@ -10,6 +10,7 @@ const {
   dialog,
   session,
   systemPreferences,
+  ipcMain,
 } = require("electron");
 const path = require("path");
 const http = require("http");
@@ -21,6 +22,8 @@ const DEV_URL = process.env.CORTEX_URL || "http://127.0.0.1:3000";
 
 /** Fixed loopback port for packaged app (local-only). */
 const PROD_PORT = Number(process.env.CORTEX_PORT || 47832);
+
+const ptyHost = require("./pty-host.cjs");
 
 // Dev must not share userData lock with /Applications/Cortex.app
 if (isDev) {
@@ -76,6 +79,153 @@ function loadCortexEnv() {
 
 let mainWindow = null;
 let stopping = false;
+/** Base URL of the local Next server (set after resolveServerUrl). */
+let serverBaseUrl = DEV_URL;
+
+function isLocalAppUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname === "127.0.0.1" || u.hostname === "localhost";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open agent terminal inside the main Cortex window (same shell — not a popup,
+ * not macOS Terminal.app).
+ */
+function openAgentTerminalInMain({ agent, title, url }) {
+  if (!agent) {
+    return { ok: false, detail: "Missing agent id" };
+  }
+  let target = String(url || "").trim();
+  if (!target) {
+    if (!serverBaseUrl) {
+      return { ok: false, detail: "Server not ready" };
+    }
+    target = `${serverBaseUrl}/agents/terminal?agent=${encodeURIComponent(agent)}`;
+  }
+  if (!isLocalAppUrl(target)) {
+    return { ok: false, detail: "Invalid agent terminal URL" };
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, detail: "Main window not available" };
+  }
+
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+
+  // Prefer soft client navigation (keeps SPA shell); fall back to loadURL.
+  mainWindow.webContents
+    .executeJavaScript(
+      `(() => {
+        try {
+          const path = ${JSON.stringify(
+            `/agents/terminal?agent=${encodeURIComponent(agent)}`,
+          )};
+          if (window.next && window.next.router) {
+            window.next.router.push(path);
+            return "router";
+          }
+          // App Router: use history + soft navigation event if available
+          if (typeof window !== "undefined") {
+            window.history.pushState({}, "", path);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+            // Hard navigation is more reliable across Next versions
+            window.location.assign(path);
+            return "assign";
+          }
+        } catch (e) {
+          return "fail:" + (e && e.message ? e.message : String(e));
+        }
+        return "none";
+      })()`,
+    )
+    .then((how) => {
+      if (how === "none" || (typeof how === "string" && how.startsWith("fail"))) {
+        mainWindow.loadURL(target).catch((err) => {
+          console.error("[cortex] agent terminal navigate failed", err);
+        });
+      }
+    })
+    .catch(() => {
+      mainWindow.loadURL(target).catch((err) => {
+        console.error("[cortex] agent terminal loadURL failed", err);
+      });
+    });
+
+  if (title) {
+    mainWindow.setTitle(`${title} — Cortex`);
+  }
+
+  return { ok: true, detail: "Opened agent terminal in Cortex" };
+}
+
+function registerIpc() {
+  ipcMain.handle("agents:open-terminal", (_event, opts = {}) => {
+    try {
+      const agent = String(opts.agent || "").trim();
+      const title = String(opts.title || agent || "Agent");
+      let url = String(opts.url || "").trim();
+      if (!url && agent && serverBaseUrl) {
+        url = `${serverBaseUrl}/agents/terminal?agent=${encodeURIComponent(agent)}`;
+      }
+      return openAgentTerminalInMain({ agent, title, url });
+    } catch (e) {
+      return {
+        ok: false,
+        detail: e instanceof Error ? e.message : String(e),
+      };
+    }
+  });
+
+  // --- Main-process PTY (avoids Turbopack/standalone node-pty breakage) ---
+  ipcMain.handle("pty:start", (event, opts = {}) => {
+    const wc = event.sender;
+    const emit = (payload) => {
+      if (!wc.isDestroyed()) {
+        wc.send("pty:event", payload);
+      }
+    };
+    try {
+      return ptyHost.createSession(
+        {
+          agent: String(opts.agent || "").trim(),
+          cols: Number(opts.cols) || 120,
+          rows: Number(opts.rows) || 36,
+          cwd: opts.cwd ? String(opts.cwd) : undefined,
+        },
+        emit,
+      );
+    } catch (e) {
+      return {
+        ok: false,
+        detail: e instanceof Error ? e.message : String(e),
+      };
+    }
+  });
+
+  ipcMain.handle("pty:write", (_event, opts = {}) => {
+    const ok = ptyHost.write(String(opts.id || ""), String(opts.data ?? ""));
+    return { ok };
+  });
+
+  ipcMain.handle("pty:resize", (_event, opts = {}) => {
+    const ok = ptyHost.resize(
+      String(opts.id || ""),
+      Number(opts.cols) || 80,
+      Number(opts.rows) || 24,
+    );
+    return { ok };
+  });
+
+  ipcMain.handle("pty:kill", (_event, opts = {}) => {
+    const ok = ptyHost.kill(String(opts.id || ""));
+    return { ok };
+  });
+}
 
 function setDataDir() {
   const dataDir = path.join(app.getPath("userData"), "data");
@@ -369,8 +519,10 @@ if (!gotLock) {
       setDataDir();
       buildMenu();
       app.setName("Cortex");
+      registerIpc();
 
       const serverUrl = await resolveServerUrl();
+      serverBaseUrl = serverUrl;
       await createWindow(serverUrl);
 
       app.on("activate", async () => {
@@ -397,6 +549,11 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   stopping = true;
+  try {
+    ptyHost.killAll();
+  } catch {
+    /* ignore */
+  }
 });
 
 app.on("web-contents-created", (_event, contents) => {
