@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.1.1 (MVP) |
+| **Version** | 0.2.1 |
 | **License** | See [License](#license) |
 
 <p align="center">
@@ -20,6 +20,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 ## Table of contents
 
 - [What is Cortex?](#what-is-cortex)
+- [What's new](#whats-new)
 - [Features](#features)
 - [Installed agents & models](#installed-agents--models)
 - [Specification](#specification)
@@ -52,6 +53,29 @@ The product prioritizes a polished **dark command-center UX**, reliable multi-ag
 
 ---
 
+## What's new
+
+Highlights since the initial 0.1.x release:
+
+### Jarvis & live data (0.2.0)
+
+- **Jarvis** voice/chat interface (`/jarvis`) with live grounded answers — RivalSearchMCP-first search, Open-Meteo weather, free RSS/DDG fallbacks, and response caching for faster replies
+- **AI Agents sidebar rail** that launches Hermes, Claude Code, Codex, and Grok as real CLI processes, with embedded **in-app terminals** (`/agents/terminal`) streamed over PTY sessions
+- **News panel** with Technology feeds ranked for Anthropic, Claude Code, Grok, Codex, ChatGPT, and Hermes, plus a **GitHub tab** showing the top-20 new repos of the last 14 days by stars
+- **MCP catalog** page (`/mcp`) with export to client configs
+- Speech-to-text endpoint (Whisper-compatible) for voice input
+
+### Idea-to-app pipeline hardening (0.2.1)
+
+- Scaffolding installs devDependencies correctly and **Next builds succeed from the packaged Electron app**
+- **Vitest / Playwright test generation**, stage auto-recovery, and best-fit agent routing per phase
+- **In-app browser preview and inspection** of launched builds
+- Pipeline child processes and embedded terminal sessions are sanitized of the server's Next internals (`__NEXT_PRIVATE_*`, `NODE_ENV`, `PORT`, `HOSTNAME`, …) — fixes `next build` failures such as `generate is not a function`
+- Concept generation now **reports its source** (live Grok vs. local synthesis) and the fallback reason in the ideas page and activity feed, instead of silently returning canned concepts; local synthesis derives features and stacks from the idea's domain
+- Grok chat model is configurable via `JARVIS_GROK_MODEL` / `XAI_CHAT_MODEL` (default `grok-4.5`)
+
+---
+
 ## Features
 
 ### Agents
@@ -60,6 +84,14 @@ The product prioritizes a polished **dark command-center UX**, reliable multi-ag
 - Capabilities, current task, metrics (tokens, latency, success rate)
 - Quick actions: start / stop / restart
 - Configuration panel: system prompts, model overrides, enable/disable, tool access
+- Launch external CLI agents (Hermes, Claude Code, Codex, Grok) and drive them from embedded in-app terminals
+
+### Jarvis & live data
+- Voice/chat assistant with grounded live answers (RivalSearch-first search, weather, free RSS/DDG fallbacks)
+- AI/tech news panel ranked for Anthropic, Claude Code, Grok, Codex, ChatGPT, and Hermes
+- Trending GitHub tab: top-20 new repos of the last 14 days by stars
+- MCP server catalog with config export
+- Speech-to-text input (Whisper-compatible backend)
 
 ### Ideas → Concepts → Projects
 - Free-form idea / problem statement input
@@ -97,7 +129,7 @@ The product prioritizes a polished **dark command-center UX**, reliable multi-ag
 | **LM Studio · Qwen** | Local | Offline coding |
 | **LM Studio · Llama** | Local | Local analysis / secondary critique |
 
-> **MVP note:** Orchestration and concept generation run with a simulated multi-agent engine (and optional live Grok when `XAI_API_KEY` is set). Real CLI adapters for Hermes / Claude Code / Codex / LM Studio are on the roadmap.
+> **Note:** Concept generation uses live Grok when `XAI_API_KEY` is set (with transparent local fallback otherwise). External CLI agents (Hermes, Claude Code, Codex, Grok) can be launched and driven from embedded in-app terminals; the build pipeline runs real scaffolding, `next build`, and Vitest/Playwright test generation. Deeper per-phase CLI adapters are still on the roadmap.
 
 ---
 
@@ -241,7 +273,7 @@ Desktop shell (Electron)
 
 ### Optional: live Grok brainstorming
 
-Concept generation works offline by default. To use live Grok when developing from source, set `XAI_API_KEY` (see [Configuration](#configuration)). Packaged app support for GUI key entry is planned; for now keys are env-based in the server process.
+Concept generation works offline by default. To use live Grok, set `XAI_API_KEY` — in `.env.local` when developing from source, or in `~/Library/Application Support/cortex/.env` for the packaged app (see [Configuration](#configuration)). The ideas page shows whether concepts came from live Grok or local fallback. GUI key entry is planned.
 
 ---
 
@@ -325,9 +357,15 @@ XAI_API_KEY=
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `XAI_API_KEY` | No | Live Grok concepts via xAI API |
+| `JARVIS_GROK_MODEL` / `XAI_CHAT_MODEL` | No | Override Grok chat model (default `grok-4.5`) |
+| `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | No | Raises GitHub API rate limits for the trending-repos tab |
+| `WHISPER_API_KEY` / `WHISPER_BASE_URL` / `WHISPER_MODEL` | No | Speech-to-text backend for Jarvis voice input |
+| `TAVILY_API_KEY` | No | Optional search fallback for live answers |
 | `CORTEX_DATA_DIR` | No | Override state directory (set automatically by desktop) |
 | `CORTEX_PORT` | No | Packaged server port (default `47832`) |
 | `CORTEX_URL` | No | Dev desktop URL (default `http://127.0.0.1:3000`) |
+
+> **Packaged app:** the desktop build loads secrets from `~/Library/Application Support/cortex/.env` (not the repo's `.env.local`).
 
 ### In-app settings
 
@@ -355,7 +393,10 @@ XAI_API_KEY=
 | Route | Purpose |
 |-------|---------|
 | `/` | Command Center — metrics, live projects, activity |
+| `/jarvis` | Jarvis — voice/chat assistant, live data, news + GitHub trending |
 | `/agents` | Agent fleet, search, filters, controls |
+| `/agents/terminal` | Embedded terminals for launched CLI agents |
+| `/mcp` | MCP server catalog + config export |
 | `/ideas` | Idea capture, templates, concept generation |
 | `/projects` | Project list |
 | `/projects/[id]` | Workspace: Kanban, memory, artifacts, chat |
@@ -401,6 +442,10 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 |--------|------|-------------|
 | `GET` | `/api/agents` | List agents |
 | `PATCH` | `/api/agents/:id` | Update agent / start / stop / restart |
+| `POST` | `/api/agents/invoke` | Invoke an agent adapter directly |
+| `GET/POST` | `/api/agents/launch` | List launchable CLI agents / launch one |
+| `GET/POST` | `/api/agents/terminal` | List / create embedded terminal sessions |
+| `GET/POST` | `/api/agents/terminal/:id/…` | Terminal stream (SSE), input, resize |
 | `GET/POST` | `/api/ideas` | List / create ideas |
 | `POST` | `/api/ideas/generate` | Generate concepts |
 | `GET/POST` | `/api/projects` | List / create project from concept |
@@ -411,6 +456,11 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 | `GET` | `/api/templates` | App templates |
 | `GET/PATCH` | `/api/settings` | App settings |
 | `GET` | `/api/export/:id` | Export project JSON |
+| `GET` | `/api/news` | Ranked AI/tech news + trending GitHub repos |
+| `GET/PATCH` | `/api/mcp` | MCP server catalog |
+| `GET` | `/api/mcp/export` | Export MCP client config |
+| `GET/POST` | `/api/integrations/jarvis` | Jarvis live-data integration |
+| `GET/POST` | `/api/speech/transcribe` | Speech-to-text (Whisper-compatible) |
 
 ---
 
@@ -443,6 +493,18 @@ xattr -cr /Applications/Cortex.app
 ```
 
 Or **Right-click → Open**.
+
+### `next build` fails with “generate is not a function”
+
+Fixed in **0.2.1** — the Cortex server used to leak Next standalone internals (`__NEXT_PRIVATE_*`, `NODE_ENV=production`, `PORT`, `HOSTNAME`, …) into pipeline child processes and embedded terminal sessions, breaking any `next build` run inside them. Update Cortex; if you hit it in a terminal spawned by an older build, scrub the environment first:
+
+```bash
+env -u __NEXT_PRIVATE_STANDALONE_CONFIG -u NODE_ENV -u PORT -u HOSTNAME npx next build
+```
+
+### Ideas always return the same concepts
+
+Concept generation shows its **source** in the ideas page and activity feed. If it says local fallback, your `XAI_API_KEY` is missing, invalid, or out of credits (check [console.x.ai](https://console.x.ai)) — Cortex then synthesizes concepts locally from the idea's domain instead of calling Grok.
 
 ### Port already in use (dev)
 
