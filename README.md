@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.1 |
+| **Version** | 0.2.2 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -74,7 +74,7 @@ Highlights since the initial 0.1.x release:
 - Concept generation now **reports its source** (live Grok vs. local synthesis) and the fallback reason in the ideas page and activity feed, instead of silently returning canned concepts; local synthesis derives features and stacks from the idea's domain
 - Grok chat model is configurable via `JARVIS_GROK_MODEL` / `XAI_CHAT_MODEL` (default `grok-4.5`)
 
-### Second brain & knowledge graph (unreleased)
+### Second brain & knowledge graph (0.2.2)
 
 - **Obsidian vault integration** — point Cortex at a local Markdown vault (default `~/Documents/hermes-second-brain`) and it becomes **shared long-term memory** across agents:
   - **Jarvis** grounds answers in your own notes before reaching for live search
