@@ -1,584 +1,269 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>J.A.R.V.I.S. Interface</title>
+<meta charset="utf-8" />
+<title>Jarvis — Neural Core</title>
+<!--
+  Jarvis avatar visualization. Embedded by src/components/jarvis/JarvisAvatar.tsx
+  as an iframe with ?embed=1&state=<mood>, and driven thereafter by
+  postMessage({type:'jarvis-state', state}).
+
+  States: idle | listening | processing | speaking | offline
+  The previous flat-ring HUD is in git history (public/jarvis.html before this).
+-->
 <style>
-  :root {
-    --jarvis-cyan: #4dd8ff;
-    --jarvis-blue: #0a84ff;
-    --jarvis-deep: #002a4a;
-    --jarvis-glow: #7ee8ff;
-    --jarvis-bg: #000814;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: 100%;
-    height: 100%;
-  }
+  :root { --cy:#38e8ff; --az:#4f8bff; --vi:#9b7dff; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#04070e; }
   body {
-    background: radial-gradient(ellipse at center, #001529 0%, #000208 70%, #000 100%);
-    min-height: 100vh;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-family: 'Orbitron', 'Courier New', monospace;
-    color: var(--jarvis-cyan);
-    overflow: hidden;
-    padding: 40px 20px;
+    display:flex; align-items:center; justify-content:center;
+    font-family:ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% 45%, #0a1c33 0%, #050b16 55%, #04070e 100%);
   }
-  .grid-bg {
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(77, 216, 255, 0.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(77, 216, 255, 0.04) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none;
-    animation: gridPulse 8s ease-in-out infinite;
-  }
-  @keyframes gridPulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.7; }
-  }
-  .stage {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 30px;
-    z-index: 1;
-  }
-  .jarvis-core {
-    position: relative;
-    width: 420px;
-    height: 420px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-  }
-  svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .ring { fill: none; stroke: var(--jarvis-cyan); stroke-linecap: round; transform-origin: center; }
-  .center-glow {
-    position: absolute;
-    width: 120px; height: 120px;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--jarvis-glow) 0%, var(--jarvis-cyan) 30%, transparent 70%);
-    filter: blur(8px);
-    animation: corePulse 2.4s ease-in-out infinite;
-  }
-  .core-nucleus {
-    position: absolute;
-    width: 40px; height: 40px;
-    border-radius: 50%;
-    background: radial-gradient(circle, #fff 0%, var(--jarvis-glow) 50%, var(--jarvis-cyan) 100%);
-    box-shadow:
-      0 0 20px var(--jarvis-glow),
-      0 0 40px var(--jarvis-cyan),
-      0 0 80px var(--jarvis-blue);
-    animation: nucleusPulse 2.4s ease-in-out infinite;
-  }
-  @keyframes corePulse {
-    0%, 100% { opacity: 0.6; transform: scale(1); }
-    50% { opacity: 1; transform: scale(1.15); }
-  }
-  @keyframes nucleusPulse {
-    0%, 100% { transform: scale(1); filter: brightness(1); }
-    50% { transform: scale(1.1); filter: brightness(1.4); }
-  }
-  .rot-cw { animation: rotate 20s linear infinite; }
-  .rot-ccw { animation: rotate-r 30s linear infinite; }
-  .rot-cw-fast { animation: rotate 8s linear infinite; }
-  .rot-ccw-fast { animation: rotate-r 12s linear infinite; }
-  @keyframes rotate { to { transform: rotate(360deg); } }
-  @keyframes rotate-r { to { transform: rotate(-360deg); } }
-  .arc-segment {
-    stroke-dasharray: 80 400;
-    animation: dashShift 4s linear infinite;
-  }
-  @keyframes dashShift {
-    to { stroke-dashoffset: -480; }
-  }
-  .tick { stroke: var(--jarvis-cyan); stroke-width: 1; opacity: 0.7; }
-  .tick-bright { stroke: var(--jarvis-glow); stroke-width: 2; opacity: 1; }
-  .hex-marker { fill: var(--jarvis-cyan); opacity: 0.8; }
-  .scan-line {
-    stroke: var(--jarvis-glow);
-    stroke-width: 1.5;
-    opacity: 0.9;
-    filter: drop-shadow(0 0 4px var(--jarvis-glow));
-  }
+  #c { display:block; width:100%; height:100%; }
   .label {
-    font-size: 8px;
-    fill: var(--jarvis-cyan);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    font-family: 'Courier New', monospace;
+    position:absolute; bottom:6%; left:50%; transform:translateX(-50%);
+    font-size:11px; letter-spacing:.22em; text-transform:uppercase;
+    color:rgba(190,225,255,.5); transition:color .6s ease; white-space:nowrap;
   }
-  .label-bright { fill: var(--jarvis-glow); font-weight: bold; }
+  body.state-listening .label { color:#7fe3ff; }
+  body.state-speaking  .label { color:#a9c6ff; }
+  body.state-processing .label { color:#c3a9ff; }
+  body.state-offline   .label { color:rgba(160,180,200,.28); }
 
-  /* Interaction states */
-  .jarvis-core.state-listening .ring.pulse-listen { animation: listenPulse 1.2s ease-in-out infinite; }
-  .jarvis-core.state-speaking .core-nucleus { animation: speakPulse 0.4s ease-in-out infinite; }
-  .jarvis-core.state-processing .rot-cw { animation-duration: 4s; }
-  .jarvis-core.state-processing .rot-ccw { animation-duration: 5s; }
-  .jarvis-core.state-processing .rot-cw-fast { animation-duration: 2s; }
-  @keyframes listenPulse {
-    0%, 100% { stroke-width: 1; opacity: 0.6; }
-    50% { stroke-width: 3; opacity: 1; }
+  /* Wordmark only when opened directly — hidden inside the app's iframe. */
+  .titles { position:absolute; top:7%; left:50%; transform:translateX(-50%); text-align:center; }
+  body.embed .titles { display:none; }
+  .titles .t {
+    font-size:20px; font-weight:300; letter-spacing:.42em;
+    color:rgba(190,232,255,.92); text-shadow:0 0 22px rgba(56,232,255,.35);
   }
-  @keyframes speakPulse {
-    0%, 100% { transform: scale(1); }
-    25% { transform: scale(1.3); }
-    50% { transform: scale(0.9); }
-    75% { transform: scale(1.2); }
-  }
-
-  /* Waveform */
-  .waveform {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-    justify-content: center;
-    height: 60px;
-    padding: 12px 24px;
-    background: rgba(0, 42, 74, 0.3);
-    border: 1px solid rgba(77, 216, 255, 0.3);
-    border-radius: 4px;
-    backdrop-filter: blur(6px);
-    box-shadow: 0 0 30px rgba(77, 216, 255, 0.15) inset;
-  }
-  .wave-bar {
-    width: 3px;
-    background: linear-gradient(to top, var(--jarvis-blue), var(--jarvis-glow));
-    border-radius: 2px;
-    animation: waveBar 1.2s ease-in-out infinite;
-    box-shadow: 0 0 6px var(--jarvis-cyan);
-  }
-  @keyframes waveBar {
-    0%, 100% { height: 6px; opacity: 0.5; }
-    50% { height: 40px; opacity: 1; }
-  }
-
-  /* HUD text panels */
-  .hud-panels {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 20px;
-    align-items: center;
-    width: 100%;
-    max-width: 720px;
-    margin-top: 10px;
-  }
-  .hud-panel {
-    padding: 10px 16px;
-    border: 1px solid rgba(77, 216, 255, 0.3);
-    background: linear-gradient(135deg, rgba(0, 42, 74, 0.4), rgba(0, 20, 40, 0.2));
-    backdrop-filter: blur(4px);
-    font-size: 10px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
-    color: var(--jarvis-cyan);
-    text-shadow: 0 0 8px var(--jarvis-cyan);
-  }
-  .hud-panel .val { color: var(--jarvis-glow); font-weight: bold; }
-  .status-badge {
-    padding: 8px 20px;
-    border: 1px solid var(--jarvis-glow);
-    color: var(--jarvis-glow);
-    font-size: 11px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    background: rgba(126, 232, 255, 0.08);
-    text-shadow: 0 0 10px var(--jarvis-glow);
-    box-shadow:
-      0 0 20px rgba(126, 232, 255, 0.3),
-      inset 0 0 20px rgba(126, 232, 255, 0.1);
-    animation: statusBlink 2s ease-in-out infinite;
-  }
-  @keyframes statusBlink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
-  }
-
-  .title {
-    font-size: 42px;
-    letter-spacing: 12px;
-    color: var(--jarvis-glow);
-    text-shadow:
-      0 0 10px var(--jarvis-cyan),
-      0 0 20px var(--jarvis-cyan),
-      0 0 40px var(--jarvis-blue);
-    font-weight: 300;
-    margin-bottom: 4px;
-  }
-  .subtitle {
-    font-size: 10px;
-    letter-spacing: 6px;
-    color: rgba(77, 216, 255, 0.7);
-    text-transform: uppercase;
-    margin-bottom: 20px;
-  }
-
-  /* Controls */
-  .controls {
-    display: flex;
-    gap: 12px;
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-  .ctrl-btn {
-    padding: 10px 20px;
-    background: transparent;
-    border: 1px solid var(--jarvis-cyan);
-    color: var(--jarvis-cyan);
-    font-family: 'Courier New', monospace;
-    font-size: 11px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.2s;
-    clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
-  }
-  .ctrl-btn:hover {
-    background: rgba(77, 216, 255, 0.15);
-    color: var(--jarvis-glow);
-    box-shadow: 0 0 20px rgba(77, 216, 255, 0.4);
-  }
-  .ctrl-btn.active {
-    background: rgba(126, 232, 255, 0.2);
-    color: var(--jarvis-glow);
-    border-color: var(--jarvis-glow);
-    box-shadow: 0 0 20px var(--jarvis-cyan);
-  }
-
-  /* Particle/spark effects */
-  .spark {
-    position: absolute;
-    width: 2px;
-    height: 2px;
-    background: var(--jarvis-glow);
-    border-radius: 50%;
-    box-shadow: 0 0 6px var(--jarvis-glow);
-    animation: sparkFly 3s linear infinite;
-  }
-  @keyframes sparkFly {
-    0% { opacity: 0; transform: translate(0, 0) scale(0); }
-    20% { opacity: 1; transform: scale(1); }
-    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.3); }
-  }
-
-  /* Offline dampens the core */
-  .jarvis-core.state-offline {
-    filter: grayscale(0.55) brightness(0.55);
-    opacity: 0.75;
-  }
-  .jarvis-core.state-offline .core-nucleus,
-  .jarvis-core.state-offline .center-glow {
-    animation: none;
-  }
-
-  /* Embed mode: core-focused layout for parent app iframe */
-  body.embed {
-    padding: 8px;
-    justify-content: center;
-  }
-  body.embed .title,
-  body.embed .subtitle,
-  body.embed .controls,
-  body.embed .hud-panels {
-    display: none !important;
-  }
-  body.embed .stage {
-    gap: 12px;
-    width: 100%;
-    height: 100%;
-    justify-content: center;
-  }
-  body.embed .jarvis-core {
-    width: min(78vmin, 420px);
-    height: min(78vmin, 420px);
-  }
-  body.embed .waveform {
-    height: 44px;
-    padding: 8px 16px;
-    max-width: min(90%, 360px);
-  }
-  body.embed .waveform .wave-bar {
-    animation-play-state: paused;
-    height: 6px;
-    opacity: 0.35;
-  }
-  body.embed.state-listening .waveform .wave-bar,
-  body.embed.state-speaking .waveform .wave-bar {
-    animation-play-state: running;
-    opacity: 1;
-  }
-  body.embed.state-processing .waveform .wave-bar {
-    animation-play-state: running;
-    animation-duration: 0.55s;
-    opacity: 0.85;
+  .titles .s {
+    margin-top:7px; font-size:9px; letter-spacing:.28em;
+    color:rgba(150,185,215,.42);
   }
 </style>
 </head>
-<body>
-  <div class="grid-bg"></div>
-
-  <div class="stage">
-    <div class="title">J.A.R.V.I.S.</div>
-    <div class="subtitle">JUST · A · RATHER · VERY · INTELLIGENT · SYSTEM</div>
-
-    <div class="jarvis-core state-idle" id="jarvis">
-      <div class="center-glow"></div>
-      <div class="core-nucleus"></div>
-
-      <svg viewBox="0 0 420 420">
-        <defs>
-          <radialGradient id="ringGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="#7ee8ff" stop-opacity="0"/>
-            <stop offset="80%" stop-color="#4dd8ff" stop-opacity="0.6"/>
-            <stop offset="100%" stop-color="#0a84ff" stop-opacity="1"/>
-          </radialGradient>
-          <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="2" result="blur"/>
-            <feMerge>
-              <feMergeNode in="blur"/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
-          <filter id="strongGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="4" result="blur"/>
-            <feMerge>
-              <feMergeNode in="blur"/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
-        </defs>
-
-        <!-- Outermost slow ring with tick marks -->
-        <g class="rot-cw" filter="url(#softGlow)">
-          <circle class="ring" cx="210" cy="210" r="200" stroke-width="1" opacity="0.5"/>
-          <!-- Tick marks around outer ring -->
-          <g id="outerTicks"></g>
-        </g>
-
-        <!-- Second ring: dashed segmented -->
-        <g class="rot-ccw" filter="url(#softGlow)">
-          <circle class="ring arc-segment" cx="210" cy="210" r="180" stroke-width="1.5"/>
-          <circle class="ring arc-segment" cx="210" cy="210" r="180" stroke-width="1.5"
-                  transform="rotate(120 210 210)"/>
-          <circle class="ring arc-segment" cx="210" cy="210" r="180" stroke-width="1.5"
-                  transform="rotate(240 210 210)"/>
-        </g>
-
-        <!-- Third ring: hex markers -->
-        <g class="rot-cw-fast" filter="url(#softGlow)">
-          <circle class="ring pulse-listen" cx="210" cy="210" r="155" stroke-width="1" opacity="0.7"/>
-          <g id="hexMarkers"></g>
-        </g>
-
-        <!-- Fourth ring: label ring -->
-        <g class="rot-ccw" filter="url(#softGlow)">
-          <circle class="ring" cx="210" cy="210" r="135" stroke-width="0.5" opacity="0.5"/>
-          <g id="labelRing"></g>
-        </g>
-
-        <!-- Fifth: bracket accents (4 corners) -->
-        <g class="rot-cw-fast" filter="url(#strongGlow)">
-          <path d="M 210,95 A 115,115 0 0,1 325,210" class="ring" stroke-width="2" opacity="0.9"/>
-          <path d="M 210,325 A 115,115 0 0,1 95,210" class="ring" stroke-width="2" opacity="0.9"/>
-        </g>
-
-        <!-- Inner ring pulse -->
-        <g filter="url(#strongGlow)">
-          <circle class="ring pulse-listen" cx="210" cy="210" r="95" stroke-width="1.5" opacity="0.8"/>
-          <circle class="ring" cx="210" cy="210" r="85" stroke-width="0.5" opacity="0.4"/>
-        </g>
-
-        <!-- Innermost triangular reticle -->
-        <g class="rot-ccw-fast" filter="url(#strongGlow)">
-          <polygon points="210,150 262,240 158,240" class="ring" stroke-width="1" opacity="0.7" fill="none"/>
-          <polygon points="210,270 158,180 262,180" class="ring" stroke-width="1" opacity="0.7" fill="none"/>
-        </g>
-
-        <!-- Scan line sweep -->
-        <g class="rot-cw" style="animation-duration: 4s;">
-          <line x1="210" y1="210" x2="210" y2="30" class="scan-line"/>
-          <circle cx="210" cy="30" r="3" fill="#7ee8ff" filter="url(#strongGlow)"/>
-        </g>
-
-        <!-- Crosshairs -->
-        <line x1="30" y1="210" x2="80" y2="210" class="tick-bright"/>
-        <line x1="340" y1="210" x2="390" y2="210" class="tick-bright"/>
-        <line x1="210" y1="30" x2="210" y2="80" class="tick-bright"/>
-        <line x1="210" y1="340" x2="210" y2="390" class="tick-bright"/>
-      </svg>
-
-      <!-- Spark particles -->
-      <div id="sparks"></div>
-    </div>
-
-    <div class="waveform" id="waveform"></div>
-
-    <div class="hud-panels">
-      <div class="hud-panel">CPU · <span class="val">42%</span></div>
-      <div class="status-badge" id="statusBadge">◉ ONLINE</div>
-      <div class="hud-panel" style="text-align:right;">SYS · <span class="val">NOMINAL</span></div>
-    </div>
-
-    <div class="controls">
-      <button class="ctrl-btn active" data-state="idle">Idle</button>
-      <button class="ctrl-btn" data-state="listening">Listening</button>
-      <button class="ctrl-btn" data-state="speaking">Speaking</button>
-      <button class="ctrl-btn" data-state="processing">Processing</button>
-    </div>
-  </div>
-
+<body class="state-idle">
+<canvas id="c"></canvas>
+<div class="titles">
+  <div class="t">J.A.R.V.I.S.</div>
+  <div class="s">JUST · A · RATHER · VERY · INTELLIGENT · SYSTEM</div>
+</div>
+<div class="label" id="label">Ready</div>
 <script>
-  // Generate outer ring tick marks
-  const outerTicks = document.getElementById('outerTicks');
-  for (let i = 0; i < 72; i++) {
-    const angle = (i * 5) * Math.PI / 180;
-    const len = i % 6 === 0 ? 12 : (i % 3 === 0 ? 6 : 3);
-    const bright = i % 6 === 0;
-    const x1 = 210 + Math.cos(angle) * 200;
-    const y1 = 210 + Math.sin(angle) * 200;
-    const x2 = 210 + Math.cos(angle) * (200 - len);
-    const y2 = 210 + Math.sin(angle) * (200 - len);
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
-    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-    line.setAttribute('class', bright ? 'tick-bright' : 'tick');
-    outerTicks.appendChild(line);
+(() => {
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const labelEl = document.getElementById('label');
+  const LABELS = { idle:'Ready', listening:'Listening', processing:'Thinking',
+                   speaking:'Speaking', offline:'Offline' };
+  // Read once: setState rewrites body.className, so the embed flag must persist.
+  const EMBED = new URLSearchParams(location.search).get('embed') === '1';
+
+  let W=0, H=0, DPR=1, cx=0, cy=0, R=0;
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio||1, 2);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = W*DPR; cv.height = H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    // Budget: outermost element (arcs at 2.15) must stay inside 0.46 of the frame
+    cx = W/2; cy = H/2; R = Math.min(W,H)*0.205;
   }
+  window.addEventListener('resize', resize);
 
-  // Generate hex markers on third ring
-  const hexMarkers = document.getElementById('hexMarkers');
-  for (let i = 0; i < 12; i++) {
-    const angle = (i * 30) * Math.PI / 180;
-    const cx = 210 + Math.cos(angle) * 155;
-    const cy = 210 + Math.sin(angle) * 155;
-    const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    const points = [];
-    for (let j = 0; j < 6; j++) {
-      const a = (j * 60 + 30) * Math.PI / 180;
-      points.push(`${cx + Math.cos(a) * 4},${cy + Math.sin(a) * 4}`);
-    }
-    hex.setAttribute('points', points.join(' '));
-    hex.setAttribute('class', 'hex-marker');
-    hexMarkers.appendChild(hex);
-  }
-
-  // Generate label ring text
-  const labelRing = document.getElementById('labelRing');
-  const labels = ['NAV', 'PWR', 'AI', 'NET', 'SEC', 'SYS', 'CPU', 'MEM'];
-  labels.forEach((label, i) => {
-    const angle = (i * 45 - 90) * Math.PI / 180;
-    const x = 210 + Math.cos(angle) * 135;
-    const y = 210 + Math.sin(angle) * 135;
-    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    text.setAttribute('x', x);
-    text.setAttribute('y', y);
-    text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('dominant-baseline', 'middle');
-    text.setAttribute('class', 'label label-bright');
-    text.textContent = label;
-    labelRing.appendChild(text);
-  });
-
-  // Generate waveform bars
-  const waveform = document.getElementById('waveform');
-  for (let i = 0; i < 40; i++) {
-    const bar = document.createElement('div');
-    bar.className = 'wave-bar';
-    bar.style.animationDelay = `${i * 0.05}s`;
-    bar.style.animationDuration = `${0.8 + Math.random() * 0.8}s`;
-    waveform.appendChild(bar);
-  }
-
-  // Generate spark particles
-  const sparks = document.getElementById('sparks');
-  function createSpark() {
-    const spark = document.createElement('div');
-    spark.className = 'spark';
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 80 + Math.random() * 120;
-    spark.style.left = '50%';
-    spark.style.top = '50%';
-    spark.style.setProperty('--dx', `${Math.cos(angle) * dist}px`);
-    spark.style.setProperty('--dy', `${Math.sin(angle) * dist}px`);
-    spark.style.animationDuration = `${1.5 + Math.random() * 2}s`;
-    sparks.appendChild(spark);
-    setTimeout(() => spark.remove(), 3500);
-  }
-  setInterval(createSpark, 200);
-
-  // State control — parent drives via postMessage / ?state= / ?embed=1
-  const params = new URLSearchParams(location.search);
-  if (params.get('embed') === '1') document.body.classList.add('embed');
-
-  const jarvis = document.getElementById('jarvis');
-  const statusBadge = document.getElementById('statusBadge');
-  const stateLabels = {
-    idle: '◉ ONLINE',
-    listening: '◉ LISTENING',
-    speaking: '◉ SPEAKING',
-    processing: '⟳ PROCESSING',
-    thinking: '⟳ PROCESSING',
-    offline: '◌ OFFLINE'
+  // ── state ────────────────────────────────────────────────────────────────
+  let state = 'idle';
+  const P = { // eased toward TARGET[state] every frame
+    spin:0.10, breathe:1, glow:1, converge:0, amp:0, hue:0
   };
-
-  function normalizeState(next) {
-    if (!next) return 'idle';
-    const key = String(next).toLowerCase();
-    if (key === 'thinking') return 'processing';
-    if (stateLabels[key]) return key === 'thinking' ? 'processing' : key;
-    return 'idle';
+  const TARGET = {
+    idle:       { spin:0.10, breathe:1.00, glow:1.00, converge:0.00, hue:0.00 },
+    listening:  { spin:0.16, breathe:1.05, glow:1.35, converge:0.55, hue:0.10 },
+    processing: { spin:0.62, breathe:0.97, glow:1.20, converge:0.15, hue:0.60 },
+    speaking:   { spin:0.22, breathe:1.08, glow:1.55, converge:0.00, hue:0.28 },
+    offline:    { spin:0.02, breathe:0.94, glow:0.22, converge:0.00, hue:0.00 },
+  };
+  let primed = false;
+  function setState(s){
+    if(!TARGET[s]) return;
+    state = s;
+    document.body.className = (EMBED ? 'embed ' : '') + 'state-' + s;
+    labelEl.textContent = LABELS[s];
+    // First state comes from the URL — start there rather than easing up from idle
+    if(!primed){ Object.assign(P, TARGET[s]); primed = true; }
   }
 
-  function setJarvisState(next) {
-    const state = normalizeState(next);
-    jarvis.className = `jarvis-core state-${state}`;
-    document.body.classList.remove(
-      'state-idle', 'state-listening', 'state-speaking',
-      'state-processing', 'state-offline'
-    );
-    document.body.classList.add(`state-${state}`);
-    statusBadge.textContent = stateLabels[state] || stateLabels.idle;
-    document.querySelectorAll('.ctrl-btn').forEach(b => {
-      const btnState = b.dataset.state;
-      b.classList.toggle('active', btnState === state || (state === 'offline' && btnState === 'idle'));
+  // ── particle shell: points on a sphere, rotated and projected ────────────
+  const N = 260;
+  const pts = [];
+  for(let i=0;i<N;i++){
+    // fibonacci sphere → even distribution
+    const k = i + 0.5;
+    const phi = Math.acos(1 - 2*k/N);
+    const theta = Math.PI * (1 + Math.sqrt(5)) * k;
+    pts.push({
+      x: Math.sin(phi)*Math.cos(theta),
+      y: Math.sin(phi)*Math.sin(theta),
+      z: Math.cos(phi),
+      seed: Math.random()*Math.PI*2,
+      sp: 0.6 + Math.random()*0.8,
+      // varied mass so the shell reads as depth, not a uniform dot screen
+      m: 0.45 + Math.pow(Math.random(), 2.2)*1.5,
     });
   }
 
-  document.querySelectorAll('.ctrl-btn').forEach(btn => {
-    btn.addEventListener('click', () => setJarvisState(btn.dataset.state));
-  });
+  const lerp = (a,b,t) => a + (b-a)*t;
+  function mixHue(t){
+    // cyan → azure → violet
+    const stops = [[56,232,255],[79,139,255],[155,125,255]];
+    const p = Math.max(0,Math.min(1,t))*(stops.length-1);
+    const i = Math.floor(p), f = p-i;
+    const a = stops[i], b = stops[Math.min(i+1,stops.length-1)];
+    return [Math.round(lerp(a[0],b[0],f)), Math.round(lerp(a[1],b[1],f)), Math.round(lerp(a[2],b[2],f))];
+  }
 
-  // Click core to cycle states (disabled in embed — parent handles click)
-  jarvis.addEventListener('click', () => {
-    if (document.body.classList.contains('embed')) return;
-    const states = ['idle', 'listening', 'speaking', 'processing'];
-    const current = (jarvis.className.match(/state-(\w+)/) || [])[1] || 'idle';
-    const next = states[(states.indexOf(current) + 1) % states.length];
-    setJarvisState(next);
-  });
+  let t = 0, rot = 0;
+  function frame(){
+    t += 1/60;
+    const tg = TARGET[state];
+    for(const k of ['spin','breathe','glow','converge','hue']) P[k] = lerp(P[k], tg[k], 0.05);
+    // speech amplitude: layered sines → organic, non-repeating feel
+    const speaking = state === 'speaking';
+    const listening = state === 'listening';
+    const rawAmp = speaking
+      ? (Math.sin(t*7.1)*0.5 + Math.sin(t*11.3)*0.3 + Math.sin(t*17.7)*0.2)
+      : listening ? Math.sin(t*2.2)*0.35 : 0;
+    P.amp = lerp(P.amp, Math.abs(rawAmp), 0.25);
 
-  const initial = params.get('state');
-  if (initial) setJarvisState(initial);
+    rot += P.spin/60 * Math.PI*2;
 
-  window.addEventListener('message', (event) => {
-    const data = event.data;
-    if (!data || typeof data !== 'object') return;
-    if (data.type === 'jarvis-state' && data.state != null) {
-      setJarvisState(data.state);
+    ctx.clearRect(0,0,W,H);
+    const [cr,cg,cb] = mixHue(P.hue);
+    const breathe = P.breathe + Math.sin(t*0.9)*0.02 + P.amp*0.10;
+    const r = R*breathe;
+
+    // ── outer atmospheric bloom ───────────────────────────────────────────
+    const bloom = ctx.createRadialGradient(cx,cy,0,cx,cy,r*3.1);
+    bloom.addColorStop(0,   `rgba(${cr},${cg},${cb},${0.20*P.glow})`);
+    bloom.addColorStop(0.35,`rgba(${cr},${cg},${cb},${0.07*P.glow})`);
+    bloom.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = bloom;
+    ctx.fillRect(0,0,W,H);
+
+    // ── volumetric core sphere: dark limb + hot nucleus (fresnel feel) ─────
+    const core = ctx.createRadialGradient(cx - r*0.18, cy - r*0.22, r*0.02, cx, cy, r*0.92);
+    core.addColorStop(0,    `rgba(255,255,255,${0.95*P.glow})`);
+    core.addColorStop(0.14, `rgba(${Math.min(255,cr+70)},${Math.min(255,cg+40)},255,${0.85*P.glow})`);
+    core.addColorStop(0.42, `rgba(${cr},${cg},${cb},${0.42*P.glow})`);
+    core.addColorStop(0.80, `rgba(${Math.round(cr*0.35)},${Math.round(cg*0.45)},${Math.round(cb*0.7)},${0.20*P.glow})`);
+    core.addColorStop(1,    'rgba(4,7,14,0)');
+    ctx.beginPath(); ctx.arc(cx,cy,r*0.92,0,Math.PI*2);
+    ctx.fillStyle = core; ctx.fill();
+
+    // fresnel rim — bright edge, reads as a lit sphere not a flat disc
+    ctx.beginPath(); ctx.arc(cx,cy,r*0.9,0,Math.PI*2);
+    ctx.strokeStyle = `rgba(${Math.min(255,cr+50)},${Math.min(255,cg+50)},255,${0.30*P.glow})`;
+    ctx.lineWidth = Math.max(1, r*0.012); ctx.stroke();
+
+    // ── neural shell: particles + proximity links ─────────────────────────
+    const proj = [];
+    const cosR = Math.cos(rot), sinR = Math.sin(rot);
+    const tiltC = Math.cos(0.42), tiltS = Math.sin(0.42);
+    for(const p of pts){
+      // rotate around Y, then tilt around X
+      let x = p.x*cosR - p.z*sinR;
+      let z = p.x*sinR + p.z*cosR;
+      let y = p.y*tiltC - z*tiltS;
+      z     = p.y*tiltS + z*tiltC;
+      // radius: converge inward when listening, jitter with speech
+      const wobble = 1 + Math.sin(t*p.sp + p.seed)*0.045;
+      const shell = (1.34 - P.converge*0.30) * wobble + P.amp*0.13;
+      const depth = (z+1)/2;                        // 0 back → 1 front
+      proj.push({
+        sx: cx + x*r*shell,
+        sy: cy + y*r*shell,
+        d: depth,
+        s: (0.5 + depth*1.5) * (r*0.016) * p.m,
+      });
     }
+    proj.sort((a,b)=>a.d-b.d);                       // painter's order
+
+    // links between nearby front-ish points → constellation / synapse read
+    const LINK = r*0.42;
+    ctx.lineWidth = Math.max(0.6, r*0.006);
+    for(let i=0;i<proj.length;i++){
+      const a = proj[i]; if(a.d < 0.34) continue;
+      for(let j=i+1;j<Math.min(i+14,proj.length);j++){
+        const b = proj[j];
+        const dx = a.sx-b.sx, dy = a.sy-b.sy;
+        const dist = Math.hypot(dx,dy);
+        if(dist < LINK){
+          const o = (1 - dist/LINK) * 0.55 * a.d * P.glow;
+          ctx.strokeStyle = `rgba(${cr},${cg},${cb},${o})`;
+          ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke();
+        }
+      }
+    }
+    for(const p of proj){
+      const o = (0.18 + p.d*0.72) * P.glow;
+      ctx.beginPath(); ctx.arc(p.sx,p.sy,p.s,0,Math.PI*2);
+      ctx.fillStyle = `rgba(${Math.min(255,cr+40)},${Math.min(255,cg+30)},255,${o})`;
+      ctx.fill();
+    }
+
+    // ── thin orbital arcs — a whisper of the old HUD, modernised ──────────
+    const arcs = [
+      { rad:1.70, from:rot*0.7,      len:1.5, w:0.020, a:0.38 },
+      { rad:1.93, from:-rot*0.45+2.0,len:0.9, w:0.013, a:0.26 },
+      { rad:2.15, from:rot*0.28+4.1, len:2.3, w:0.009, a:0.17 },
+    ];
+    for(const A of arcs){
+      ctx.beginPath();
+      ctx.arc(cx,cy,r*A.rad,A.from,A.from+A.len);
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${A.a*P.glow})`;
+      ctx.lineWidth = Math.max(1, r*A.w);
+      ctx.lineCap = 'round'; ctx.stroke();
+    }
+
+    // ── voice ring: amplitude bars only when there is something to say ────
+    if(P.amp > 0.02){
+      const BARS = 96, ringR = r*1.16;
+      for(let i=0;i<BARS;i++){
+        const ang = (i/BARS)*Math.PI*2 - Math.PI/2;
+        const n = Math.sin(i*0.7 + t*6.5) * Math.sin(i*0.23 + t*3.1);
+        const h = r*0.10 * P.amp * (0.35 + Math.abs(n));
+        const x1 = cx + Math.cos(ang)*ringR,      y1 = cy + Math.sin(ang)*ringR;
+        const x2 = cx + Math.cos(ang)*(ringR+h),  y2 = cy + Math.sin(ang)*(ringR+h);
+        ctx.strokeStyle = `rgba(${Math.min(255,cr+30)},${cg},255,${0.5*P.amp+0.15})`;
+        ctx.lineWidth = Math.max(1, r*0.010); ctx.lineCap='round';
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      }
+    }
+
+    // ── processing sweep: a single confident arc, not a radar sweep ───────
+    if(state === 'processing'){
+      const a0 = rot*2.2;
+      const g = ctx.createLinearGradient(cx-r,cy-r,cx+r,cy+r);
+      g.addColorStop(0,`rgba(${cr},${cg},${cb},0)`);
+      g.addColorStop(1,`rgba(200,180,255,.9)`);
+      ctx.beginPath(); ctx.arc(cx,cy,r*1.34,a0,a0+1.1);
+      ctx.strokeStyle = g; ctx.lineWidth = Math.max(2, r*0.028); ctx.lineCap='round'; ctx.stroke();
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  // ── host contract: identical to the current jarvis.html ─────────────────
+  const qs = new URLSearchParams(location.search);
+  resize();
+  setState(qs.get('state') || 'idle');
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if(d && d.type === 'jarvis-state' && typeof d.state === 'string') setState(d.state);
   });
+  requestAnimationFrame(frame);
+})();
 </script>
 </body>
 </html>
