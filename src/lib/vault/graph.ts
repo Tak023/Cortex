@@ -18,7 +18,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { getVaultDir, isVaultEnabled } from "./vault";
+import { getVaultDir, isIndexedVaultEntry, isVaultEnabled } from "./vault";
 
 export type GraphSource = "graphify" | "wikilinks";
 
@@ -197,8 +197,8 @@ function listNotes(dir: string, depth = 0, out: string[] = []): string[] {
     return out;
   }
   for (const e of entries) {
-    // Skip dotfiles (.obsidian, .git) and graphify's own output directory.
-    if (e.name.startsWith(".") || e.name === GRAPHIFY_DIR) continue;
+    // Skips dotfiles (.obsidian, .git) and graphify's own output directory.
+    if (!isIndexedVaultEntry(e.name)) continue;
     const abs = path.join(dir, e.name);
     if (e.isDirectory()) listNotes(abs, depth + 1, out);
     else if (e.isFile() && e.name.endsWith(".md")) {
@@ -275,7 +275,7 @@ function buildWikilinkGraph(): VaultGraph {
   const seen = new Set<string>();
   const addEdge = (source: string, target: string, relation: string) => {
     if (source === target) return;
-    const key = `${source} ${target} ${relation}`;
+    const key = `${source}\0${target}\0${relation}`;
     if (seen.has(key)) return;
     seen.add(key);
     edges.push({ source, target, relation, confidence: "EXTRACTED", confidenceScore: 1 });

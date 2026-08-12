@@ -84,6 +84,21 @@ export function vaultStatus(): VaultStatus {
 
 const contentCache = new Map<string, { mtimeMs: number; content: string }>();
 
+/**
+ * Directories never indexed as notes. `graphify-out/` is generated build
+ * output — its GRAPH_REPORT.md outranked hand-written notes in search and ate
+ * slots in the top-N block injected into prompts. The semantic graph layer
+ * still reads `graphify-out/graph.json` directly, so excluding it here does
+ * not affect Graphify.
+ */
+const EXCLUDED_DIRS = new Set(["graphify-out"]);
+
+/** Shared by both note walkers (vault.ts and graph.ts) so they cannot drift. */
+export function isIndexedVaultEntry(name: string): boolean {
+  // dotfiles cover .obsidian, .git, and friends
+  return !name.startsWith(".") && !EXCLUDED_DIRS.has(name);
+}
+
 function listNotes(dir: string, depth = 0, out: string[] = []): string[] {
   if (depth > MAX_DEPTH || out.length >= MAX_NOTES) return out;
   let entries: fs.Dirent[];
@@ -93,7 +108,7 @@ function listNotes(dir: string, depth = 0, out: string[] = []): string[] {
     return out;
   }
   for (const e of entries) {
-    if (e.name.startsWith(".")) continue; // .obsidian, .git, dotfiles
+    if (!isIndexedVaultEntry(e.name)) continue;
     const abs = path.join(dir, e.name);
     if (e.isDirectory()) {
       listNotes(abs, depth + 1, out);
