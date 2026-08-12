@@ -39,6 +39,23 @@ function DesktopBadge() {
   );
 }
 
+/** Inlined by next.config.ts at build time from package.json. */
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "dev";
+
+/** Pinned to the bottom of the rail so the running version is always visible. */
+function VersionFooter() {
+  return (
+    <div className="border-t border-border-subtle px-3 py-2 text-center">
+      <span
+        className="text-[10px] tracking-wide text-muted"
+        title={`Cortex ${APP_VERSION}`}
+      >
+        {`Cortex v${APP_VERSION}`}
+      </span>
+    </div>
+  );
+}
+
 type NavItem = {
   href: string;
   label: string;
@@ -248,6 +265,8 @@ function SidebarNav() {
           ))}
         </div>
       </nav>
+
+      <VersionFooter />
     </aside>
   );
 }
