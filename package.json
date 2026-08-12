@@ -1,6 +1,6 @@
 {
   "name": "cortex",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "license": "GPL-3.0-only",
   "description": "Cortex — Agentic OS control plane (desktop + local web)",

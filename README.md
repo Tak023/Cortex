@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.2 |
+| **Version** | 0.2.3 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -85,6 +85,10 @@ Highlights since the initial 0.1.x release:
   - **Live links** — derived from Markdown on every request (`[[wikilinks]]`, `#tags`, folders). No Python, no LLM, no build step; used automatically when graphify has not been run
   - Node-type legend, community focus, concept search, group relationships, a detail panel with rationale and neighbors, and **core abstractions** — the most connected nodes, which graphify calls *god nodes*
 - Writes are constrained to the vault's own contract: `raw/` is **refused as read-only** and paths outside the vault are rejected
+
+### Version indicator (0.2.3)
+
+- The **running version** is shown at the bottom of the left sidebar, so a packaged build always identifies itself. Inlined from `package.json` at build time as `NEXT_PUBLIC_APP_VERSION` — no runtime lookup
 
 ---
 
