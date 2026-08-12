@@ -221,10 +221,10 @@ Each phase picks an agent using:
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  UI  ·  Next.js App Router + React 19 + Tailwind             │
-│  Command · Agents · Ideas · Projects · Orchestration · Settings│
-└────────────────────────────┬─────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  UI  ·  Next.js App Router + React 19 + Tailwind                │
+│  Command · Agents · Ideas · Projects · Orchestration · Settings │
+└────────────────────────────┬────────────────────────────────────┘
                              │  Route Handlers (HTTP API)
 ┌────────────────────────────▼─────────────────────────────────┐
 │  Collaboration engine                                        │
@@ -232,7 +232,7 @@ Each phase picks an agent using:
 │  · Concept generation (Grok / local synthesis)               │
 │  · Pipeline builder + orchestrator tick loop                 │
 │  · Shared memory · artifacts · activity bus                  │
-└──────────────┬──────────────────────────┬──────────────────┘
+└──────────────┬──────────────────────────┬────────────────────┘
                │                          │
 ┌──────────────▼────────────┐ ┌───────────▼────────────────────┐
 │  Persistence · JSON store │ │  Second brain · Obsidian vault │
