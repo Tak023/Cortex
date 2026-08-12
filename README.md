@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.5 |
+| **Version** | 0.2.6 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -102,6 +102,12 @@ Highlights since the initial 0.1.x release:
 - Fixes a React **hydration mismatch on `/jarvis`** that forced the whole page tree to be discarded and re-rendered on every load. Mic availability (`typeof window` dependent) was read during render, so the server said "unavailable" and the client "available" on first paint — flipping the orb between `<div>` and `<button>`
 - The capability is now read through `useSyncExternalStore` with a server snapshot, so the first client render matches the delivered HTML
 - Also stops an invalid `disabled` attribute rendering on a `div`
+
+### Vault index cleanup (0.2.6)
+
+- **`graphify-out/` is no longer indexed as notes.** Its generated `GRAPH_REPORT.md` was being treated as a vault note, outranking hand-written ones in most searches and consuming slots in the top-N block injected into Jarvis prompts and pipeline research context
+- The exclusion now lives in one shared predicate used by both note walkers, which had already drifted — `graph.ts` skipped the directory while `vault.ts` did not, so `vault.noteCount` reported 12 against the graph's 11
+- Graphify is unaffected: the semantic layer reads `graphify-out/graph.json` by direct path, not through the note walker
 
 ---
 
