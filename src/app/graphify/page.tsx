@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Network,
   RefreshCw,
@@ -33,27 +33,44 @@ export default function GraphifyPage() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [layer, setLayer] = useState<Layer>("graphify");
+  const [rescanKey, setRescanKey] = useState(0);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [focusedCommunity, setFocusedCommunity] = useState<number | null>(null);
 
-  const load = useCallback(async (which: Layer) => {
-    setLoading(true);
-    try {
-      const url =
-        which === "wikilinks" ? "/api/vault/graph?source=wikilinks" : "/api/vault/graph";
-      const res = await fetch(url);
-      setData((await res.json()) as GraphResponse);
-    } catch {
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // The fetch is keyed on [layer, rescanKey]; the handlers that change those
+  // raise `loading`, so the effect never sets state synchronously.
   useEffect(() => {
-    void load(layer);
-  }, [load, layer]);
+    let cancelled = false;
+    const url =
+      layer === "wikilinks" ? "/api/vault/graph?source=wikilinks" : "/api/vault/graph";
+    void (async () => {
+      try {
+        const res = await fetch(url);
+        const json = (await res.json()) as GraphResponse;
+        if (!cancelled) setData(json);
+      } catch {
+        if (!cancelled) setData(null);
+      } finally {
+        // When cancelled a newer run is in flight — let it clear `loading`.
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [layer, rescanKey]);
+
+  const selectLayer = (next: Layer) => {
+    if (next === layer) return;
+    setLoading(true);
+    setLayer(next);
+  };
+
+  const rescan = () => {
+    setLoading(true);
+    setRescanKey((key) => key + 1);
+  };
 
   const graph = data?.graph ?? null;
 
@@ -93,7 +110,7 @@ export default function GraphifyPage() {
             <div className="flex items-center rounded-lg border border-border bg-panel-elevated/60 p-0.5 text-xs">
               <button
                 type="button"
-                onClick={() => setLayer("graphify")}
+                onClick={() => selectLayer("graphify")}
                 className={`rounded-md px-2.5 py-1 transition-colors ${
                   layer === "graphify"
                     ? "bg-accent-soft text-accent"
@@ -104,7 +121,7 @@ export default function GraphifyPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setLayer("wikilinks")}
+                onClick={() => selectLayer("wikilinks")}
                 className={`rounded-md px-2.5 py-1 transition-colors ${
                   layer === "wikilinks"
                     ? "bg-accent-soft text-accent"
@@ -118,7 +135,7 @@ export default function GraphifyPage() {
               type="button"
               size="sm"
               variant="secondary"
-              onClick={() => void load(layer)}
+              onClick={rescan}
               disabled={loading}
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
