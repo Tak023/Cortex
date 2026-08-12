@@ -30,6 +30,10 @@ export async function PATCH(req: Request) {
     body.voiceInputMode === "external"
       ? { voiceInputMode: body.voiceInputMode }
       : {}),
+    ...(typeof body.vaultEnabled === "boolean"
+      ? { vaultEnabled: body.vaultEnabled }
+      : {}),
+    ...(typeof body.vaultDir === "string" ? { vaultDir: body.vaultDir } : {}),
     ...(typeof body.jarvisEnabled === "boolean"
       ? { jarvisEnabled: body.jarvisEnabled }
       : {}),

@@ -249,6 +249,15 @@ export interface AppSettings {
    */
   voiceInputMode: VoiceInputMode;
 
+  // ── Second brain (Obsidian vault) ──
+  /**
+   * When true (and the vault exists), Jarvis grounds answers in local notes
+   * and the pipeline reads/writes the vault as long-term memory.
+   */
+  vaultEnabled: boolean;
+  /** Path to the Obsidian vault (supports ~). Env CORTEX_VAULT_DIR overrides. */
+  vaultDir: string;
+
   // ── OpenJarvis integration (https://github.com/open-jarvis/OpenJarvis) ──
   /** Master switch for the OpenJarvis adapter */
   jarvisEnabled: boolean;

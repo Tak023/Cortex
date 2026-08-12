@@ -31,6 +31,12 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState<string | null>(null);
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
   const [jarvis, setJarvis] = useState<JarvisStatus | null>(null);
+  const [vault, setVault] = useState<{
+    enabled: boolean;
+    dir: string;
+    available: boolean;
+    noteCount: number;
+  } | null>(null);
   const [jarvisBusy, setJarvisBusy] = useState(false);
   const [testReply, setTestReply] = useState<string | null>(null);
 
@@ -54,9 +60,20 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const refreshVault = useCallback(async () => {
+    try {
+      const res = await fetch("/api/vault");
+      const data = (await res.json()) as { vault: typeof vault };
+      setVault(data.vault);
+    } catch {
+      setVault(null);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshJarvis();
-  }, [refreshJarvis]);
+    void refreshVault();
+  }, [refreshJarvis, refreshVault]);
 
   return (
     <>
@@ -124,6 +141,78 @@ export default function SettingsPage() {
             {saved && (
               <p className="text-xs text-emerald-400">{saved}</p>
             )}
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium">Second brain (Obsidian)</span>
+              <span
+                className={`text-[11px] ${
+                  vault?.available ? "text-emerald-400" : "text-muted"
+                }`}
+              >
+                {vault
+                  ? vault.available
+                    ? `Connected — ${vault.noteCount} notes`
+                    : "Vault not found"
+                  : "…"}
+              </span>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-xs text-muted leading-relaxed">
+              Jarvis grounds answers in your local Obsidian vault and the
+              pipeline reads it during research, then writes project outcomes
+              back to <code className="text-foreground/80">projects/</code> and{" "}
+              <code className="text-foreground/80">log.md</code> as long-term
+              memory. <code className="text-foreground/80">raw/</code> is never
+              modified. Vault-grounded answers prefer the local model.
+            </p>
+
+            <label className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm">Enable second brain</div>
+                <div className="text-xs text-muted">
+                  Search notes for chat + research; write project memory back
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings?.vaultEnabled ?? true}
+                onChange={async (e) => {
+                  await update({ vaultEnabled: e.target.checked });
+                  flash("Saved");
+                  void refreshVault();
+                }}
+                className="h-4 w-4 accent-blue-500"
+              />
+            </label>
+
+            <label className="block">
+              <div className="mb-1 text-sm">Vault path</div>
+              <input
+                type="text"
+                defaultValue={settings?.vaultDir ?? ""}
+                onBlur={async (e) => {
+                  if (e.target.value !== settings?.vaultDir) {
+                    await update({ vaultDir: e.target.value });
+                    flash("Saved");
+                    void refreshVault();
+                  }
+                }}
+                placeholder="~/Documents/hermes-second-brain"
+                className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+              />
+              <p className="mt-1 text-[11px] text-muted">
+                Override with{" "}
+                <code className="text-foreground/70">CORTEX_VAULT_DIR</code>.
+                The folder must contain the vault&apos;s{" "}
+                <code className="text-foreground/70">CLAUDE.md</code> or{" "}
+                <code className="text-foreground/70">.obsidian</code>.
+              </p>
+            </label>
           </CardBody>
         </Card>
 

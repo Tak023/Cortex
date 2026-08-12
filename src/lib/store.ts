@@ -54,6 +54,9 @@ function defaultSettings(): AppSettings {
     defaultLocalModel:
       "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit",
     voiceInputMode: "auto",
+    vaultEnabled: true,
+    vaultDir:
+      process.env.CORTEX_VAULT_DIR || "~/Documents/hermes-second-brain",
     jarvisEnabled: true,
     jarvisBaseUrl: process.env.JARVIS_BASE_URL || "http://127.0.0.1:8000",
     jarvisChatBaseUrl:

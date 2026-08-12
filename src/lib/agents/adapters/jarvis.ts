@@ -27,6 +27,7 @@ import {
   formatClockContext,
   needsLiveData,
 } from "../../search/realtime";
+import { searchVault } from "../../vault/vault";
 import type {
   AgentAdapter,
   AgentHealth,
@@ -529,6 +530,8 @@ type EnrichedChat = {
   wantsLive: boolean;
   /** True when search returned at least one hit */
   hasLiveHits: boolean;
+  /** True when the second brain (Obsidian vault) had relevant notes */
+  hasVaultHits: boolean;
   liveProvider?: string;
 };
 
@@ -553,7 +556,7 @@ async function enrichChatRequest(
 ): Promise<EnrichedChat> {
   const isChat = req.voiceMode || req.phase === "chat";
   if (!isChat) {
-    return { req, wantsLive: false, hasLiveHits: false };
+    return { req, wantsLive: false, hasLiveHits: false, hasVaultHits: false };
   }
 
   const context: Record<string, string> = { ...(req.context ?? {}) };
@@ -562,6 +565,18 @@ async function enrichChatRequest(
   let hasLiveHits = false;
   let liveProvider: string | undefined;
   let prompt = req.prompt;
+
+  // Second brain: local Obsidian vault notes (fast, offline, best-effort)
+  let vaultBlock: string | null = null;
+  try {
+    const vault = searchVault(req.prompt, { limit: 4 });
+    if (vault?.hits.length) {
+      vaultBlock = vault.block;
+      context["Second brain notes"] = vault.block;
+    }
+  } catch {
+    /* vault is best-effort */
+  }
 
   try {
     const live = await fetchLiveContext(req.prompt, { force: wantsLive });
@@ -586,10 +601,20 @@ async function enrichChatRequest(
     /* search is best-effort */
   }
 
+  // Pin vault notes on the user turn too — local models often skim context.
+  if (vaultBlock) {
+    prompt =
+      `${prompt}\n\n` +
+      `---\nSECOND BRAIN (the user's local Obsidian notes — authoritative for their personal, project, and knowledge-base context):\n` +
+      `${vaultBlock.slice(0, 2500)}\n---\n` +
+      `When the question concerns the user, their projects, or their notes, answer from SECOND BRAIN and mention the note it came from.`;
+  }
+
   return {
     req: { ...req, context, prompt },
     wantsLive,
     hasLiveHits,
+    hasVaultHits: Boolean(vaultBlock),
     liveProvider,
   };
 }
@@ -1239,14 +1264,19 @@ export const jarvisAdapter: AgentAdapter = {
 
     // Chat/voice: clock + live web enrichment, then hybrid Grok / LM Studio
     if (isChat) {
-      const { req: enriched, wantsLive, hasLiveHits, liveProvider } =
+      const { req: enriched, wantsLive, hasLiveHits, hasVaultHits, liveProvider } =
         await enrichChatRequest(req);
       const mode = resolveChatMode();
-      const preferGrok = shouldPreferGrok(mode, wantsLive, hasLiveHits);
+      // Vault-grounded personal questions stay on the local model (private +
+      // fast); live-data questions keep their existing routing.
+      const grounded = hasLiveHits || (hasVaultHits && !wantsLive);
+      const preferGrok = shouldPreferGrok(mode, wantsLive, grounded);
       const routeHint =
         wantsLive || hasLiveHits
           ? `live${liveProvider ? `/${liveProvider}` : ""}`
-          : "local-private";
+          : hasVaultHits
+            ? "local-second-brain"
+            : "local-private";
 
       if (preferGrok) {
         try {

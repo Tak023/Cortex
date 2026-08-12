@@ -16,6 +16,7 @@ import {
   isJarvisAgent,
 } from "../agents/adapters";
 import { ensureProjectWorkspace } from "../workspace";
+import { searchVault, writeVaultProjectNote } from "../vault/vault";
 import { scaffoldAppFromConcept } from "../build/scaffold";
 import { getLaunchInfo } from "../build/launch";
 import { verifyAppBuild } from "../build/verify";
@@ -311,6 +312,7 @@ function tickProject(projectId: string) {
           message: `Project "${project.name}" failed — unresolved build/test errors`,
           projectId: project.id,
         });
+        saveProjectToSecondBrain(project);
         stopProjectRunner(projectId);
         return;
       }
@@ -339,6 +341,7 @@ function tickProject(projectId: string) {
             : `Project "${project.name}" completed — all pipeline phases done.`,
           projectId: project.id,
         });
+        saveProjectToSecondBrain(project);
         const launch = getLaunchInfo(project);
         if (launch.appPath) {
           project.appPath = launch.appPath;
@@ -910,7 +913,47 @@ function shouldInvokeLiveAgent(task: Task): boolean {
   return isJarvisAgent(agent);
 }
 
+/** Write the project outcome to the Obsidian vault as long-term memory. */
+function saveProjectToSecondBrain(project: Project) {
+  try {
+    const rel = writeVaultProjectNote(project);
+    if (rel) {
+      pushActivity({
+        type: "info",
+        message: `Saved "${project.name}" to second brain (${rel})`,
+        projectId: project.id,
+      });
+    }
+  } catch (e) {
+    console.error("second-brain write-back failed", e);
+  }
+}
+
 function finalizePhaseWithDocs(project: Project, task: Task) {
+  // Ground research in the second brain: prior notes on this topic become
+  // shared memory for every later phase (live agents and local synthesis).
+  if (task.phase === "research" && !project.sharedMemory.secondBrain) {
+    try {
+      const vault = searchVault(
+        `${project.name} ${project.concept.summary}`,
+        { limit: 4 },
+      );
+      if (vault?.hits.length) {
+        project.sharedMemory.secondBrain =
+          `Relevant notes from the user's second brain (Obsidian vault) — ` +
+          `prefer these over assumptions:\n${vault.block}`;
+        pushActivity({
+          type: "info",
+          message: `Research grounded with ${vault.hits.length} second-brain note(s) for "${project.name}"`,
+          projectId: project.id,
+          taskId: task.id,
+        });
+      }
+    } catch {
+      /* vault is best-effort */
+    }
+  }
+
   // Live OpenJarvis (or future adapters) for research/planning/architecture/polish
   if (shouldInvokeLiveAgent(task)) {
     if (asyncBusy.has(task.id)) {
