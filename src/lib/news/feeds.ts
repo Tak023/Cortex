@@ -1,10 +1,11 @@
 /**
  * Technology / AI news for the Jarvis side panel.
  * Priority: Anthropic, Claude Code, Grok, Codex, ChatGPT, Hermes, then broader AI/tech.
- * Public RSS only (no API key required).
+ * Plus GitHub trending (high-star / newly rising repos via Search API).
+ * Public RSS + public GitHub API (no key required; GITHUB_TOKEN optional for higher rate limits).
  */
 
-export type NewsCategory = "priority" | "ai" | "tech";
+export type NewsCategory = "priority" | "ai" | "tech" | "github";
 
 export type NewsItem = {
   id: string;
@@ -18,6 +19,8 @@ export type NewsItem = {
   priority: number;
   /** Matched priority labels for UI chips */
   tags?: string[];
+  /** GitHub star count when item is a repo */
+  stars?: number;
 };
 
 export type NewsFeedMeta = {
@@ -152,6 +155,7 @@ export const NEWS_CATEGORIES: { id: NewsCategory | "all"; label: string }[] = [
   { id: "priority", label: "Labs" },
   { id: "ai", label: "AI" },
   { id: "tech", label: "Tech" },
+  { id: "github", label: "GitHub" },
 ];
 
 /** Priority keywords → score boost + tag (higher first). */
@@ -331,11 +335,164 @@ export type NewsBundle = {
 };
 
 function sortByPriorityThenDate(a: NewsItem, b: NewsItem): number {
+  // GitHub tab / github items: highest stars first (newest-window already filtered)
+  if (a.category === "github" && b.category === "github") {
+    if ((b.stars ?? 0) !== (a.stars ?? 0)) {
+      return (b.stars ?? 0) - (a.stars ?? 0);
+    }
+    const ta = a.publishedAt ? Date.parse(a.publishedAt) : 0;
+    const tb = b.publishedAt ? Date.parse(b.publishedAt) : 0;
+    if (tb !== ta) return tb - ta;
+    return a.title.localeCompare(b.title);
+  }
   if (b.priority !== a.priority) return b.priority - a.priority;
+  if ((b.stars ?? 0) !== (a.stars ?? 0)) return (b.stars ?? 0) - (a.stars ?? 0);
   const ta = a.publishedAt ? Date.parse(a.publishedAt) : 0;
   const tb = b.publishedAt ? Date.parse(b.publishedAt) : 0;
   if (tb !== ta) return tb - ta;
   return a.title.localeCompare(b.title);
+}
+
+function isoDateDaysAgo(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatStars(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** Map star count → priority so mega-repos surface under GitHub / All. */
+function starsToPriority(stars: number): number {
+  // log scale: 100★≈55, 1k★≈70, 10k★≈85, 50k★≈95, 100k★≈100
+  if (stars <= 0) return 40;
+  const p = 40 + Math.log10(stars + 1) * 18;
+  return Math.min(110, Math.round(p));
+}
+
+type GhRepo = {
+  id: number;
+  full_name: string;
+  html_url: string;
+  description: string | null;
+  stargazers_count: number;
+  language: string | null;
+  created_at: string;
+  updated_at: string;
+  topics?: string[];
+  fork?: boolean;
+};
+
+/**
+ * GitHub tab rule:
+ *   Top N projects **created in the past 14 days**, ranked by **most stars**.
+ * (Not evergreen repos; not “updated recently” — only brand-new projects.)
+ */
+export const GITHUB_TOP_N = 20;
+export const GITHUB_CREATED_WITHIN_DAYS = 14;
+
+/**
+ * Top star-ranked repositories created within the last 2 weeks.
+ * Uses public Search API (no key required; set GITHUB_TOKEN for higher limits).
+ */
+export async function fetchGitHubTrending(
+  limit = GITHUB_TOP_N,
+): Promise<NewsItem[]> {
+  const topN = Math.min(Math.max(limit, 1), GITHUB_TOP_N);
+  const since = isoDateDaysAgo(GITHUB_CREATED_WITHIN_DAYS);
+  const cutoffMs =
+    Date.now() - GITHUB_CREATED_WITHIN_DAYS * 24 * 60 * 60 * 1000;
+
+  // Single search: new projects only, GitHub sorts by stars for us
+  const query = `created:>=${since} fork:false`;
+
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "Cortex/0.2 (Jarvis GitHub news; +local)",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const token =
+    process.env.GITHUB_TOKEN?.trim() ||
+    process.env.GH_TOKEN?.trim() ||
+    process.env.GITHUB_PAT?.trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let raw: GhRepo[] = [];
+  try {
+    const url = new URL("https://api.github.com/search/repositories");
+    url.searchParams.set("q", query);
+    url.searchParams.set("sort", "stars");
+    url.searchParams.set("order", "desc");
+    url.searchParams.set("per_page", String(Math.min(100, Math.max(topN, 30))));
+    const res = await fetch(url.toString(), {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const json = (await res.json()) as { items?: GhRepo[] };
+      raw = Array.isArray(json.items) ? json.items : [];
+    }
+  } catch {
+    raw = [];
+  }
+
+  // Keep only non-forks created in the last 14 days; rank by stars
+  const repos = raw
+    .filter((repo) => {
+      if (!repo?.id || repo.fork) return false;
+      const created = repo.created_at ? Date.parse(repo.created_at) : 0;
+      return created > 0 && created >= cutoffMs;
+    })
+    .sort((a, b) => b.stargazers_count - a.stargazers_count)
+    .slice(0, topN);
+
+  const items: NewsItem[] = [];
+  for (let rank = 0; rank < repos.length; rank++) {
+    const repo = repos[rank];
+    const stars = repo.stargazers_count ?? 0;
+    const tags: string[] = [
+      `#${rank + 1}`,
+      `★ ${formatStars(stars)}`,
+      "New (2w)",
+    ];
+    if (repo.language) tags.push(repo.language);
+    for (const t of (repo.topics || []).slice(0, 1)) {
+      if (!tags.includes(t)) tags.push(t);
+    }
+
+    // Pure star ranking for GitHub tab (higher stars = higher priority)
+    const priority = 200 - rank; // #1 highest
+
+    const created = repo.created_at ? Date.parse(repo.created_at) : 0;
+    const ageDays =
+      created > 0
+        ? Math.max(0, Math.floor((Date.now() - created) / 86_400_000))
+        : 0;
+
+    items.push({
+      id: `gh-top-${repo.id}`,
+      title: repo.full_name,
+      url: repo.html_url,
+      source: "GitHub",
+      snippet:
+        (repo.description || "No description").slice(0, 200) +
+        ` · ★ ${formatStars(stars)}` +
+        (repo.language ? ` · ${repo.language}` : "") +
+        ` · created ${ageDays}d ago`,
+      publishedAt: repo.created_at || repo.updated_at,
+      category: "github",
+      priority,
+      tags: tags.slice(0, 5),
+      stars,
+    });
+  }
+
+  return items;
 }
 
 function normalizeTitleKey(title: string): string {
@@ -363,6 +520,7 @@ function dedupeByTitle(items: NewsItem[]): NewsItem[] {
 
 /**
  * Aggregate technology / AI feeds with priority ranking. Never throws.
+ * Includes GitHub trending (high-star / rising repos) for `github` and `all`.
  */
 export async function fetchNewsBundle(opts?: {
   category?: NewsCategory | "all";
@@ -370,6 +528,19 @@ export async function fetchNewsBundle(opts?: {
 }): Promise<NewsBundle> {
   const category = opts?.category ?? "all";
   const limit = Math.min(Math.max(opts?.limit ?? 28, 6), 50);
+
+  // GitHub-only tab: top 20 new projects (created last 14 days) by stars
+  if (category === "github") {
+    const gh = await fetchGitHubTrending(GITHUB_TOP_N);
+    // Already sorted by stars; do not re-mix with news priority rules
+    return {
+      items: gh.slice(0, GITHUB_TOP_N),
+      fetchedAt: new Date().toISOString(),
+      providers: gh.length ? ["GitHub"] : [],
+      category,
+      focus: "technology-ai",
+    };
+  }
 
   const feeds =
     category === "all"
@@ -383,7 +554,14 @@ export async function fetchNewsBundle(opts?: {
 
   const perFeed = category === "priority" ? 10 : 8;
 
-  const results = await Promise.all(feeds.map((f) => fetchFeed(f, perFeed)));
+  // In All/Tech, surface a few of the same top new GitHub projects
+  const includeGithub = category === "all" || category === "tech";
+  const [results, githubItems] = await Promise.all([
+    Promise.all(feeds.map((f) => fetchFeed(f, perFeed))),
+    includeGithub
+      ? fetchGitHubTrending(category === "all" ? 8 : 5)
+      : Promise.resolve([] as NewsItem[]),
+  ]);
 
   const providers = new Set<string>();
   const flat: NewsItem[] = [];
@@ -396,13 +574,22 @@ export async function fetchNewsBundle(opts?: {
       } else if (category === "priority") {
         if (item.priority >= 75 || item.category === "priority") flat.push(item);
       } else if (category === "ai") {
-        if (item.priority >= 35 || item.category === "ai" || item.category === "priority") {
+        if (
+          item.priority >= 35 ||
+          item.category === "ai" ||
+          item.category === "priority"
+        ) {
           flat.push(item);
         }
       } else if (item.category === "tech" || isTechRelevant(item)) {
         flat.push(item);
       }
     }
+  }
+
+  for (const item of githubItems) {
+    providers.add(item.source);
+    flat.push(item);
   }
 
   const items = dedupeByTitle(flat.sort(sortByPriorityThenDate)).slice(0, limit);

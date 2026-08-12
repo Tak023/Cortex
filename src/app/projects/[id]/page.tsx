@@ -61,9 +61,9 @@ export default function ProjectDetailPage({
         actions={<ProjectControls project={project} onAction={action} />}
       />
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
-        {/* Always-first launch path — sticky so it stays visible */}
-        <div className="sticky top-0 z-20 -mx-1 space-y-3 bg-background/90 pb-2 backdrop-blur-md">
-          <div className="flex flex-wrap items-center gap-2 px-1">
+        {/* Launch path scrolls with the page (not sticky — tall panel was covering kanban) */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
             <Link
               href="/projects"
               className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
@@ -91,25 +91,48 @@ export default function ProjectDetailPage({
             )}
           </div>
 
-          {project.buildStatus === "failed" &&
-            project.unresolvedErrors &&
-            project.unresolvedErrors.length > 0 && (
+          {project.status === "failed" &&
+            ((project.unresolvedErrors &&
+              project.unresolvedErrors.length > 0) ||
+              (project.resolutionGuide &&
+                project.resolutionGuide.length > 0)) && (
               <Card className="border-rose-500/40 bg-rose-500/10">
-                <CardBody className="space-y-2">
+                <CardBody className="space-y-3">
                   <p className="text-sm font-medium text-rose-200">
-                    Unresolved errors — project not marked complete
+                    Cortex could not auto-resolve — project not complete
                   </p>
-                  <ul className="list-disc space-y-1 pl-4 text-xs text-rose-100/90">
-                    {project.unresolvedErrors.slice(0, 12).map((e) => (
-                      <li key={e} className="break-words">
-                        {e}
-                      </li>
-                    ))}
-                  </ul>
+                  {project.unresolvedErrors &&
+                    project.unresolvedErrors.length > 0 && (
+                      <ul className="list-disc space-y-1 pl-4 text-xs text-rose-100/90">
+                        {project.unresolvedErrors.slice(0, 12).map((e) => (
+                          <li key={e} className="break-words">
+                            {e}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  {project.resolutionGuide &&
+                    project.resolutionGuide.length > 0 && (
+                      <div className="space-y-1.5 rounded-md border border-rose-400/20 bg-black/20 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-100/90">
+                          How to resolve
+                        </p>
+                        <div className="space-y-1 text-xs text-rose-50/90">
+                          {project.resolutionGuide.map((step, i) => (
+                            <p
+                              key={i}
+                              className="break-words whitespace-pre-wrap"
+                            >
+                              {step}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   <p className="text-[11px] text-muted">
-                    See Artifacts → <code>build-test-report.md</code>. Fix the
-                    app under <code>app/</code>, then use{" "}
-                    <strong>Rebuild app</strong> / <strong>Launch app</strong>.
+                    Full logs: Artifacts → <code>build-test-report.md</code> /{" "}
+                    <code>resolution-guide.md</code>. After fixing, use{" "}
+                    <strong>Rebuild app</strong> or re-run the pipeline.
                   </p>
                 </CardBody>
               </Card>

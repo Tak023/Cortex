@@ -14,6 +14,15 @@ contextBridge.exposeInMainWorld("cortexDesktop", {
   openAgentTerminal: (opts) =>
     ipcRenderer.invoke("agents:open-terminal", opts),
 
+  /**
+   * Open a local project URL in Cortex's in-app browser preview window.
+   * Used during build/test so runtime UI errors are visible.
+   */
+  openBrowserPreview: (opts) =>
+    ipcRenderer.invoke("browser:open-preview", opts),
+
+  closeBrowserPreview: () => ipcRenderer.invoke("browser:close-preview"),
+
   /** True when main-process PTY host is available */
   hasPty: true,
 

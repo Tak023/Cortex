@@ -25,6 +25,159 @@ const runners = new Map<string, ReturnType<typeof setInterval>>();
 /** Tasks currently doing async work (e.g. scaffolding) — avoid double-firing */
 const asyncBusy = new Set<string>();
 
+/** Default automatic recovery attempts per pipeline phase */
+const DEFAULT_MAX_RETRIES: Record<string, number> = {
+  research: 2,
+  planning: 2,
+  architecture: 2,
+  implementation: 3,
+  testing: 3,
+  polish: 2,
+};
+
+function maxRetriesFor(task: Task): number {
+  return task.maxRetries ?? DEFAULT_MAX_RETRIES[task.phase] ?? 2;
+}
+
+/**
+ * Re-queue a failed stage so the runner can try again.
+ * Returns true if recovery was scheduled.
+ */
+function scheduleStageRecovery(
+  project: Project,
+  task: Task,
+  error: string,
+  recoveryNote: string,
+): boolean {
+  const used = task.retryCount ?? 0;
+  const max = maxRetriesFor(task);
+  if (used >= max) return false;
+
+  task.retryCount = used + 1;
+  task.lastError = error;
+  task.status = "queued";
+  task.progress = 0;
+  task.completedAt = null;
+  task.outputSummary = null;
+  project.status = "running";
+  project.paused = false;
+  project.buildStatus =
+    task.phase === "testing" || task.phase === "implementation"
+      ? "pending"
+      : project.buildStatus;
+  project.updatedAt = new Date().toISOString();
+
+  project.messages.push({
+    id: `msg-${nanoid(6)}`,
+    role: "system",
+    content:
+      `**${task.title} failed — auto-recovering** (attempt ${task.retryCount}/${max}).\n\n` +
+      `Error: ${error.slice(0, 400)}\n\n` +
+      `${recoveryNote}`,
+    createdAt: new Date().toISOString(),
+  });
+
+  if (task.agentId) {
+    updateAgent(task.agentId, {
+      status: "idle",
+      currentTaskId: null,
+      currentTaskLabel: null,
+    });
+  }
+
+  upsertProject(project);
+  pushActivity({
+    type: "info",
+    message: `Auto-recovering ${task.title} (attempt ${task.retryCount}/${max}): ${error.slice(0, 120)}`,
+    projectId: project.id,
+    taskId: task.id,
+    agentId: task.agentId ?? undefined,
+  });
+
+  // Keep runner alive so the re-queued task starts
+  startProjectRunner(project.id);
+  return true;
+}
+
+/**
+ * Mark a stage (and project) as failed with human-readable fix instructions.
+ */
+function failStageWithGuide(
+  project: Project,
+  task: Task,
+  errors: string[],
+  guide: string[],
+  summary: string,
+) {
+  task.status = "failed";
+  task.progress = 100;
+  task.completedAt = new Date().toISOString();
+  task.outputSummary = summary;
+  task.lastError = errors[0] ?? summary;
+  project.status = "failed";
+  project.unresolvedErrors = errors;
+  project.resolutionGuide = guide;
+  if (task.phase === "testing" || task.phase === "implementation") {
+    project.buildStatus = "failed";
+  }
+  project.updatedAt = new Date().toISOString();
+
+  const guideMd =
+    guide.length > 0
+      ? `\n\n### How to resolve\n\n${guide.map((g) => (g.startsWith("```") || g.startsWith("**") || g.startsWith("#") ? g : `- ${g}`)).join("\n")}`
+      : "";
+
+  project.messages.push({
+    id: `msg-${nanoid(6)}`,
+    role: "system",
+    content:
+      `**Unable to auto-resolve ${task.title}** after ${task.retryCount ?? 0} recovery attempt(s).\n\n` +
+      `### Errors\n${errors.map((e) => `- ${e}`).join("\n")}` +
+      guideMd,
+    createdAt: new Date().toISOString(),
+  });
+
+  // Persist a resolution artifact for the Artifacts tab
+  const resolutionArtifact = {
+    id: `art-${nanoid(8)}`,
+    name: "resolution-guide.md",
+    kind: "note" as const,
+    content:
+      `# Resolution guide — ${task.title}\n\n` +
+      `**Phase:** ${task.phase}\n` +
+      `**Recovery attempts:** ${task.retryCount ?? 0}/${maxRetriesFor(task)}\n\n` +
+      `## Errors\n${errors.map((e) => `- ${e}`).join("\n")}\n\n` +
+      `## How to resolve\n\n${guide.join("\n\n")}\n`,
+    phase: task.phase,
+    agentId: task.agentId ?? "system",
+    createdAt: new Date().toISOString(),
+  };
+  project.artifacts = project.artifacts.filter(
+    (a) => a.name !== "resolution-guide.md",
+  );
+  project.artifacts.push(resolutionArtifact);
+  task.artifacts = task.artifacts.filter((a) => a.name !== "resolution-guide.md");
+  task.artifacts.push(resolutionArtifact);
+
+  if (task.agentId) {
+    updateAgent(task.agentId, {
+      status: "idle",
+      currentTaskId: null,
+      currentTaskLabel: null,
+    });
+  }
+
+  upsertProject(project);
+  pushActivity({
+    type: "error",
+    message: `Could not auto-resolve ${task.title}: ${errors[0] ?? summary}`,
+    projectId: project.id,
+    taskId: task.id,
+  });
+  stopProjectRunner(project.id);
+  releaseAgents(project);
+}
+
 export function isProjectRunning(projectId: string): boolean {
   return runners.has(projectId);
 }
@@ -130,18 +283,27 @@ function tickProject(projectId: string) {
           /* ignore */
         }
         const errs = project.unresolvedErrors ?? [];
-        project.messages.push({
-          id: `msg-${nanoid(6)}`,
-          role: "system",
-          content:
-            `**Pipeline stopped — unresolved errors.**\n\n` +
-            (errs.length
-              ? errs.map((e) => `- ${e}`).join("\n")
-              : "- See testing artifacts for details.") +
-            `\n\nCortex attempted automatic fixes but could not clear all issues. ` +
-            `Open **Artifacts → build-test-report.md**, fix the app under \`app/\`, then use **Rebuild app** / **Launch app**.`,
-          createdAt: new Date().toISOString(),
-        });
+        const guide = project.resolutionGuide ?? [];
+        // Avoid duplicate terminal messages if failStageWithGuide already notified
+        const alreadyNotified = project.messages.some((m) =>
+          m.content.includes("Unable to auto-resolve"),
+        );
+        if (!alreadyNotified) {
+          project.messages.push({
+            id: `msg-${nanoid(6)}`,
+            role: "system",
+            content:
+              `**Pipeline stopped — unresolved errors.**\n\n` +
+              (errs.length
+                ? errs.map((e) => `- ${e}`).join("\n")
+                : "- See testing artifacts for details.") +
+              (guide.length
+                ? `\n\n### How to resolve\n\n${guide.map((g) => (g.startsWith("```") || g.startsWith("**") ? g : `- ${g}`)).join("\n")}`
+                : `\n\nCortex attempted automatic fixes but could not clear all issues. ` +
+                  `Open **Artifacts → build-test-report.md** / **resolution-guide.md**, fix the app under \`app/\`, then use **Rebuild app** / **Launch app**.`),
+            createdAt: new Date().toISOString(),
+          });
+        }
         upsertProject(project);
         releaseAgents(project);
         pushActivity({
@@ -328,6 +490,42 @@ async function runImplementationBuild(projectId: string, taskId: string) {
     // Re-export so app/ is included after scaffold
     project.workspacePath = ensureProjectWorkspace(project);
 
+    // Do not hand off a broken tree to Testing
+    if (!result.installOk || result.buildOk === false) {
+      const detail =
+        (!result.installOk
+          ? `npm install failed:\n${result.installLog}`
+          : `build smoke failed:\n${result.buildLog || ""}`) + "";
+      const p = getProject(projectId);
+      if (!p) return;
+      const t = p.tasks.find((x) => x.id === taskId);
+      if (!t) return;
+      const recovered = scheduleStageRecovery(
+        p,
+        t,
+        detail.slice(0, 400),
+        "Re-scaffolding app with clean install + build smoke before Testing.",
+      );
+      if (recovered) return;
+      failStageWithGuide(
+        p,
+        t,
+        [detail.slice(0, 500)],
+        [
+          `Open \`${result.appDir}\``,
+          "```bash",
+          `cd "${result.appDir}"`,
+          "rm -rf .next node_modules package-lock.json",
+          "npm install",
+          "npx next build",
+          "```",
+          "Then click **Rebuild app** or **Retry stage** in Cortex.",
+        ],
+        `Implementation did not produce a buildable app`,
+      );
+      return;
+    }
+
     const fileList = result.filesWritten.map((f) => `- \`app/${f}\``).join("\n");
     const content = `# Implementation — real app scaffolded
 
@@ -350,6 +548,13 @@ ${result.installOk ? "Succeeded." : "Needs attention:"}
 
 \`\`\`
 ${result.installLog.slice(0, 1500)}
+\`\`\`
+
+## Build smoke
+${result.buildOk ? "Succeeded." : "Needs attention:"}
+
+\`\`\`
+${(result.buildLog || "").slice(0, 1500)}
 \`\`\`
 
 ## Concept
@@ -385,6 +590,7 @@ ${project.concept.summary}
     p.launchCommand = result.runHint;
     const urlMatch = result.runHint.match(/http:\/\/[^\s#]+/);
     p.launchUrl = urlMatch?.[0] ?? "http://127.0.0.1:3456";
+    p.buildStatus = "pending";
     t.outputSummary = result.summary;
     t.completedAt = new Date().toISOString();
     t.progress = 100;
@@ -394,10 +600,11 @@ ${project.concept.summary}
       role: "agent",
       agentId: t.agentId ?? undefined,
       content:
-        `**App built.**\n\n` +
-        `1. Click **Launch app** on this project page (starts the server + opens browser)\n` +
-        `2. Or in Terminal:\n\`\`\`\n${result.runHint}\n\`\`\`\n` +
-        `3. Folder: \`${result.appDir}\``,
+        `**App scaffolded & build smoke passed.**\n\n` +
+        `1. Click **Launch app** on this project page\n` +
+        `2. Or Terminal:\n\`\`\`\n${result.runHint}\n\`\`\`\n` +
+        `3. Folder: \`${result.appDir}\`\n\n` +
+        `Testing will run Vitest (and Playwright when available).`,
       createdAt: new Date().toISOString(),
     });
 
@@ -444,33 +651,27 @@ ${project.concept.summary}
     const t = p.tasks.find((x) => x.id === taskId);
     if (!t) return;
     const msg = e instanceof Error ? e.message : String(e);
-    t.status = "failed";
-    t.outputSummary = `Scaffold failed: ${msg}`;
-    t.progress = 100;
-    t.completedAt = new Date().toISOString();
-    p.status = "failed";
-    p.buildStatus = "failed";
-    p.unresolvedErrors = [msg];
-    p.messages.push({
-      id: `msg-${nanoid(6)}`,
-      role: "system",
-      content: `Implementation failed: ${msg}`,
-      createdAt: new Date().toISOString(),
-    });
-    upsertProject(p);
-    pushActivity({
-      type: "error",
-      message: `Implementation failed: ${msg}`,
-      projectId,
-      taskId,
-    });
-    if (t.agentId) {
-      updateAgent(t.agentId, {
-        status: "idle",
-        currentTaskId: null,
-        currentTaskLabel: null,
-      });
-    }
+
+    const recovered = scheduleStageRecovery(
+      p,
+      t,
+      msg,
+      "Re-running **Implementation** scaffold with a clean attempt.",
+    );
+    if (recovered) return;
+
+    failStageWithGuide(
+      p,
+      t,
+      [msg],
+      [
+        "Open the project workspace and check for disk permission or path issues.",
+        "Click **Rebuild app** on the project page to re-scaffold from the concept.",
+        "If scaffolding keeps failing, create a new idea run or inspect Cortex logs for the underlying error.",
+        `Error detail: ${msg}`,
+      ],
+      `Scaffold failed: ${msg}`,
+    );
   }
 }
 
@@ -488,16 +689,22 @@ async function runTestingVerify(projectId: string, taskId: string) {
 
   pushActivity({
     type: "info",
-    message: `Build & test starting for "${project.name}"…`,
+    message: `Build & real tests (Vitest + Playwright) starting for "${project.name}"…`,
     projectId,
     taskId,
     agentId: task.agentId ?? undefined,
   });
 
+  const attemptN = (task.retryCount ?? 0) + 1;
+  const maxStage = maxRetriesFor(task);
   project.messages.push({
     id: `msg-${nanoid(6)}`,
     role: "system",
-    content: `Running **install → build → test** with automatic fix attempts (max 3)…`,
+    content:
+      `Running **install → build → Vitest unit → Playwright e2e** ` +
+      `(stage attempt ${attemptN}/${maxStage}, up to 5 fix rounds per attempt).\n\n` +
+      `Cortex will generate/refresh real test suites under \`app/tests/\`, then use **browser access** ` +
+      `to open the app and capture console/page errors when tests fail.`,
     createdAt: new Date().toISOString(),
   });
   upsertProject(project);
@@ -508,34 +715,44 @@ async function runTestingVerify(projectId: string, taskId: string) {
     const t = p.tasks.find((x) => x.id === taskId);
     if (!t) return;
     const msg = "No app directory — implementation did not scaffold source.";
-    t.status = "failed";
-    t.progress = 100;
-    t.completedAt = new Date().toISOString();
-    t.outputSummary = msg;
-    p.status = "failed";
-    p.buildStatus = "failed";
-    p.unresolvedErrors = [msg];
-    p.messages.push({
-      id: `msg-${nanoid(6)}`,
-      role: "system",
-      content: `**Testing failed:** ${msg}`,
-      createdAt: new Date().toISOString(),
-    });
-    upsertProject(p);
-    pushActivity({ type: "error", message: msg, projectId, taskId });
-    if (t.agentId) {
-      updateAgent(t.agentId, {
-        status: "idle",
-        currentTaskId: null,
-        currentTaskLabel: null,
-      });
+
+    // Prefer recovering by re-running implementation if possible
+    const impl = p.tasks.find((x) => x.phase === "implementation");
+    if (impl && (impl.retryCount ?? 0) < maxRetriesFor(impl)) {
+      // Mark testing blocked; re-queue implementation
+      t.status = "pending";
+      t.progress = 0;
+      t.lastError = msg;
+      const recovered = scheduleStageRecovery(
+        p,
+        impl,
+        msg,
+        "No app source found — re-running **Implementation** so Testing can continue.",
+      );
+      if (recovered) return;
     }
-    stopProjectRunner(projectId);
+
+    failStageWithGuide(
+      p,
+      t,
+      [msg],
+      [
+        "Implementation did not produce an `app/` folder.",
+        "Click **Rebuild app** to re-scaffold from the concept.",
+        "Or re-run the idea → project pipeline from Ideas.",
+      ],
+      msg,
+    );
     return;
   }
 
   try {
-    const result = await verifyAppBuild(appDir);
+    const result = await verifyAppBuild(appDir, {
+      concept: project.concept,
+      generateTests: true,
+      browserInspect: true,
+      headedBrowser: process.env.CORTEX_HEADED_BROWSER === "1",
+    });
     const p = getProject(projectId);
     if (!p) return;
     const t = p.tasks.find((x) => x.id === taskId);
@@ -564,61 +781,87 @@ async function runTestingVerify(projectId: string, taskId: string) {
     if (result.ok) {
       p.buildStatus = "passed";
       p.unresolvedErrors = [];
-      t.outputSummary = "Build & test passed";
+      p.resolutionGuide = null;
+      t.outputSummary =
+        `Build & tests passed (Vitest ${result.unitOk ? "✓" : "✗"} · Playwright ${result.e2eOk ? "✓" : "✗"})`;
+      t.lastError = null;
       t.status = "completed";
       p.messages.push({
         id: `msg-${nanoid(6)}`,
         role: "agent",
         agentId: t.agentId ?? undefined,
-        content: `**Build & test passed.**\n\nInstall ✓ · Build ✓ · Test ✓\n\nSee Artifacts → \`build-test-report.md\`.`,
+        content:
+          `**Build & real tests passed**` +
+          (t.retryCount
+            ? ` after ${t.retryCount} recovery attempt(s).`
+            : ".") +
+          `\n\nInstall ✓ · Build ✓ · Vitest unit ✓ · Playwright e2e ✓\n` +
+          (result.testsGenerated ? `\n_${result.testsGenerated}_\n` : "") +
+          `\nSee Artifacts → \`build-test-report.md\`. Suites live in \`app/tests/\`.`,
         createdAt: new Date().toISOString(),
       });
-      completeTask(p, t, "Build & test passed");
+      completeTask(p, t, t.outputSummary || "Build & tests passed");
       const next = p.tasks.find(
         (x) =>
           x.order === t.order + 1 &&
           (x.status === "pending" || x.status === "queued"),
       );
       if (next) next.status = "queued";
+      if (t.agentId) {
+        updateAgent(t.agentId, {
+          status: "idle",
+          currentTaskId: null,
+          currentTaskLabel: null,
+        });
+      }
+      p.workspacePath = ensureProjectWorkspace(p);
+      upsertProject(p);
       pushActivity({
         type: "task_complete",
         message: `Build & test passed for "${p.name}"`,
         projectId: p.id,
         taskId: t.id,
       });
-    } else {
-      p.buildStatus = "failed";
-      p.unresolvedErrors = result.unresolvedErrors;
-      t.status = "failed";
-      t.outputSummary = `Build/test failed: ${result.unresolvedErrors.slice(0, 3).join("; ")}`;
-      p.status = "failed";
-      p.messages.push({
-        id: `msg-${nanoid(6)}`,
-        role: "system",
-        content:
-          `**Build/test failed after automatic fix attempts.**\n\n` +
-          result.unresolvedErrors.map((e) => `- ${e}`).join("\n") +
-          `\n\nFull log: Artifacts → \`build-test-report.md\`.\n` +
-          `App folder: \`${result.appDir}\`\n` +
-          `Fix manually, then use **Rebuild app** or start a new idea run.`,
-        createdAt: new Date().toISOString(),
-      });
-      pushActivity({
-        type: "error",
-        message: `Build/test failed: ${result.unresolvedErrors[0] ?? "see report"}`,
-        projectId: p.id,
-        taskId: t.id,
-      });
-      stopProjectRunner(projectId);
+      return;
     }
 
-    if (t.agentId) {
-      updateAgent(t.agentId, {
-        status: "idle",
-        currentTaskId: null,
-        currentTaskLabel: null,
-      });
+    // Auto-fix rounds inside verify failed — try another full testing stage
+    const errSummary =
+      result.unresolvedErrors.slice(0, 3).join("; ") ||
+      "Build/test failed";
+    const recovered = scheduleStageRecovery(
+      p,
+      t,
+      errSummary,
+      `Re-running **Testing** with progressive auto-fixes (cleared caches / reinstall / scaffold repairs).\n\n` +
+        `Last report: Artifacts → \`build-test-report.md\`.`,
+    );
+    if (recovered) {
+      // Keep the latest report on the project while retrying
+      p.lastVerifyReport = result.report;
+      p.buildStatus = "pending";
+      p.workspacePath = ensureProjectWorkspace(p);
+      upsertProject(p);
+      return;
     }
+
+    // Exhausted stage retries — notify user with resolution guide
+    failStageWithGuide(
+      p,
+      t,
+      result.unresolvedErrors.length
+        ? result.unresolvedErrors
+        : [errSummary],
+      result.resolutionGuide.length
+        ? result.resolutionGuide
+        : [
+            `Open \`${result.appDir}\``,
+            "Run `rm -rf .next node_modules && npm install && npm run build && npm test`",
+            "Fix any remaining errors, then use **Rebuild app** in Cortex.",
+          ],
+      `Build/test failed: ${errSummary}`,
+    );
+    p.lastVerifyReport = result.report;
     p.workspacePath = ensureProjectWorkspace(p);
     upsertProject(p);
   } catch (e) {
@@ -627,29 +870,26 @@ async function runTestingVerify(projectId: string, taskId: string) {
     const t = p.tasks.find((x) => x.id === taskId);
     if (!t) return;
     const msg = e instanceof Error ? e.message : String(e);
-    t.status = "failed";
-    t.progress = 100;
-    t.completedAt = new Date().toISOString();
-    t.outputSummary = msg;
-    p.status = "failed";
-    p.buildStatus = "failed";
-    p.unresolvedErrors = [msg];
-    p.messages.push({
-      id: `msg-${nanoid(6)}`,
-      role: "system",
-      content: `**Testing crashed:** ${msg}`,
-      createdAt: new Date().toISOString(),
-    });
-    upsertProject(p);
-    pushActivity({ type: "error", message: msg, projectId, taskId });
-    if (t.agentId) {
-      updateAgent(t.agentId, {
-        status: "idle",
-        currentTaskId: null,
-        currentTaskLabel: null,
-      });
-    }
-    stopProjectRunner(projectId);
+
+    const recovered = scheduleStageRecovery(
+      p,
+      t,
+      msg,
+      "Testing crashed unexpectedly — retrying the stage.",
+    );
+    if (recovered) return;
+
+    failStageWithGuide(
+      p,
+      t,
+      [msg],
+      [
+        `Testing crashed: ${msg}`,
+        "Check Cortex server logs for the stack trace.",
+        "Use **Rebuild app**, then re-open the project to re-run Testing.",
+      ],
+      msg,
+    );
   }
 }
 
@@ -661,11 +901,10 @@ function shouldInvokeLiveAgent(task: Task): boolean {
   if (!task.agentId) return false;
   const agent = getState().agents.find((a) => a.id === task.agentId);
   if (!agent || !agent.config.enabled) return false;
-  // Doc-synthesis phases can use live adapters (implementation/testing have their own paths)
-  if (
-    task.phase === "implementation" ||
-    task.phase === "testing"
-  ) {
+  // Implementation + testing are deterministic Cortex build tooling
+  // (scaffold / npm install / next build / vitest) — NOT the named AI agent.
+  // The agentId is ownership/display only; live Codex/Claude never write the app here.
+  if (task.phase === "implementation" || task.phase === "testing") {
     return false;
   }
   return isJarvisAgent(agent);
@@ -751,30 +990,55 @@ async function finalizePhaseWithLiveAgent(projectId: string, taskId: string) {
   if (!t || t.status !== "running") return;
 
   if (!result.ok || !result.content.trim()) {
-    // Fall back to simulation so the pipeline never stalls
+    const err = result.error || "empty response from live agent";
+    // First: local synthesis fallback so the stage still completes
     pushActivity({
       type: "info",
       message:
-        `Live agent unavailable (${result.error || "empty response"}) — using local synthesis for ${t.phase}.`,
+        `Live agent unavailable (${err}) — using local synthesis for ${t.phase}.`,
       projectId,
       taskId,
       agentId: t.agentId ?? undefined,
     });
-    const output = synthesizePhaseOutput(
-      t.phase,
-      p.name,
-      p.concept.summary,
-      p.sharedMemory,
-    );
-    applyPhaseCompletion(p, t, {
-      content: output.content,
-      summary: output.summary + " (local fallback)",
-      artifactName: output.artifactName,
-      tokens: 1000,
-      latencyMs: result.usage?.latencyMs ?? 500,
-      backend: "simulation-fallback",
-    });
-    return;
+    try {
+      const output = synthesizePhaseOutput(
+        t.phase,
+        p.name,
+        p.concept.summary,
+        p.sharedMemory,
+      );
+      applyPhaseCompletion(p, t, {
+        content: output.content,
+        summary: output.summary + " (local fallback)",
+        artifactName: output.artifactName,
+        tokens: 1000,
+        latencyMs: result.usage?.latencyMs ?? 500,
+        backend: "simulation-fallback",
+      });
+      return;
+    } catch (synthErr) {
+      const msg =
+        synthErr instanceof Error ? synthErr.message : String(synthErr);
+      const recovered = scheduleStageRecovery(
+        p,
+        t,
+        `${err}; local fallback also failed: ${msg}`,
+        `Retrying **${t.title}** with a different agent routing path.`,
+      );
+      if (recovered) return;
+      failStageWithGuide(
+        p,
+        t,
+        [err, msg],
+        [
+          `Phase **${t.phase}** could not produce deliverables.`,
+          "Enable a healthy agent (Jarvis / Grok / local model) in Settings.",
+          "Resume the project, or re-run from Ideas if the stage stays blocked.",
+        ],
+        `Phase failed: ${err}`,
+      );
+      return;
+    }
   }
 
   const artifactName = `${t.phase}.md`;
@@ -1017,6 +1281,15 @@ export function pauseProject(projectId: string): Project | null {
 export function resumeProject(projectId: string): Project | null {
   const project = getProject(projectId);
   if (!project) return null;
+
+  // Failed projects: re-queue the failed stage instead of no-oping
+  if (
+    project.status === "failed" ||
+    project.tasks.some((t) => t.status === "failed")
+  ) {
+    return retryFailedStage(projectId);
+  }
+
   project.paused = false;
   if (project.status === "paused") project.status = "running";
   project.updatedAt = new Date().toISOString();
@@ -1033,6 +1306,7 @@ export function resumeProject(projectId: string): Project | null {
 /**
  * Re-run the real app scaffold for a project (implementation phase).
  * Useful when a project finished under the old markdown-only pipeline.
+ * Also re-queues Testing/Polish so the pipeline can pass after a prior failure.
  */
 export async function rebuildProjectApp(
   projectId: string,
@@ -1060,6 +1334,8 @@ export async function rebuildProjectApp(
       completedAt: null,
       estimatedMinutes: 25,
       order: 3,
+      retryCount: 0,
+      lastError: null,
     };
     project.tasks.push(task);
   } else {
@@ -1067,11 +1343,35 @@ export async function rebuildProjectApp(
     task.progress = 10;
     task.completedAt = null;
     task.outputSummary = null;
+    task.retryCount = 0;
+    task.lastError = null;
+  }
+
+  // Reset downstream stages so Testing runs again after scaffold
+  for (const t of project.tasks) {
+    if (t.phase === "testing" || t.phase === "polish") {
+      t.status = "pending";
+      t.progress = 0;
+      t.completedAt = null;
+      t.outputSummary = null;
+      t.retryCount = 0;
+      t.lastError = null;
+    }
   }
 
   project.status = "running";
   project.paused = false;
+  project.buildStatus = "pending";
+  project.unresolvedErrors = [];
+  project.resolutionGuide = null;
   project.updatedAt = new Date().toISOString();
+  project.messages.push({
+    id: `msg-${nanoid(6)}`,
+    role: "system",
+    content:
+      "Rebuilding app source and re-queuing **Testing** / **Polish** so the pipeline can recover.",
+    createdAt: new Date().toISOString(),
+  });
   upsertProject(project);
   startProjectRunner(projectId);
 
@@ -1084,6 +1384,68 @@ export async function rebuildProjectApp(
   }
 
   return getProject(projectId) ?? null;
+}
+
+/**
+ * Retry only the failed stage (e.g. re-run Testing without full re-scaffold).
+ */
+export function retryFailedStage(projectId: string): Project | null {
+  const project = getProject(projectId);
+  if (!project) return null;
+
+  const failed =
+    project.tasks.find((t) => t.status === "failed") ||
+    project.tasks
+      .slice()
+      .sort((a, b) => b.order - a.order)
+      .find((t) => t.lastError);
+
+  if (!failed) {
+    // If project failed but tasks were left terminal, prefer testing
+    const testing = project.tasks.find((t) => t.phase === "testing");
+    if (!testing) return project;
+    testing.status = "queued";
+    testing.progress = 0;
+    testing.completedAt = null;
+    testing.retryCount = 0;
+    testing.lastError = null;
+  } else {
+    failed.status = "queued";
+    failed.progress = 0;
+    failed.completedAt = null;
+    failed.retryCount = 0;
+    failed.lastError = null;
+    // Keep later stages pending
+    for (const t of project.tasks) {
+      if (t.order > failed.order) {
+        t.status = "pending";
+        t.progress = 0;
+        t.completedAt = null;
+      }
+    }
+  }
+
+  project.status = "running";
+  project.paused = false;
+  project.buildStatus = "pending";
+  project.unresolvedErrors = [];
+  project.resolutionGuide = null;
+  project.updatedAt = new Date().toISOString();
+  project.messages.push({
+    id: `msg-${nanoid(6)}`,
+    role: "system",
+    content: `Retrying failed stage **${failed?.title ?? "Testing"}** with automatic recovery enabled.`,
+    createdAt: new Date().toISOString(),
+  });
+  upsertProject(project);
+  startProjectRunner(projectId);
+  pushActivity({
+    type: "info",
+    message: `Retrying failed stage on "${project.name}"`,
+    projectId,
+    taskId: failed?.id,
+  });
+  return project;
 }
 
 export function reassignTask(

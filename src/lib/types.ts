@@ -129,6 +129,12 @@ export interface Task {
   completedAt: string | null;
   estimatedMinutes: number;
   order: number;
+  /** How many automatic recovery attempts have been used for this stage */
+  retryCount?: number;
+  /** Cap for automatic stage recovery (default applied by engine) */
+  maxRetries?: number;
+  /** Last error message when status is failed or during recovery */
+  lastError?: string | null;
 }
 
 export interface ProjectMessage {
@@ -171,6 +177,11 @@ export interface Project {
   unresolvedErrors?: string[];
   /** Full last verify report (also stored as artifact) */
   lastVerifyReport?: string | null;
+  /**
+   * Step-by-step instructions when orchestration cannot auto-resolve a
+   * failed stage (shown in project UI + conversation).
+   */
+  resolutionGuide?: string[] | null;
 }
 
 export interface ActivityEvent {

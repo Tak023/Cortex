@@ -6,7 +6,7 @@ import type {
   Project,
   Task,
 } from "../types";
-import { routeAgent } from "../agents/router";
+import { phaseAgentRationale, routeAgent } from "../agents/router";
 
 export const PIPELINE_PHASES: PipelinePhase[] = [
   "research",
@@ -41,15 +41,17 @@ const PHASE_META: Record<
   },
   implementation: {
     title: "Implementation",
-    description: "Build core features and wire the primary flows.",
+    description:
+      "Cortex scaffolds a real app and runs install + build smoke (agent label is ownership only).",
     requiresApproval: false,
     minutes: 25,
   },
   testing: {
     title: "Testing",
-    description: "Validate critical paths, edge cases, and regressions.",
+    description:
+      "Cortex runs install → build → Vitest (Playwright when available). Agent label is ownership only.",
     requiresApproval: false,
-    minutes: 10,
+    minutes: 18,
   },
   polish: {
     title: "Polish",
@@ -66,17 +68,34 @@ export function buildPipelineTasks(
 ): Task[] {
   const tasks: Task[] = [];
   let prevId: string | null = null;
-  const used = new Set<string>();
+  // Soft diversity: avoid reusing the same agent twice in a row only
+  let prevAgentId: string | null = null;
 
   for (let i = 0; i < PIPELINE_PHASES.length; i++) {
     const phase = PIPELINE_PHASES[i];
     const meta = PHASE_META[phase];
-    const agent = routeAgent(agents, phase, [...used]);
-    // Allow reuse if needed, but prefer rotation for parallel feel
-    if (agent && i > 0 && Math.random() > 0.4) {
-      // don't permanently exclude — only soft diversity on first pass
+    // Always pick the best agent for this phase.
+    // Implementation/testing/architecture must NOT soft-swap away from the #1 specialist
+    // (e.g. Claude Code → Codex) — those stages own the real build/test path and labels
+    // must match the intended owner. Soft diversity only for research/planning/polish.
+    let agent = routeAgent(agents, phase);
+    const allowSoftDiversity =
+      phase === "research" || phase === "planning" || phase === "polish";
+    if (
+      allowSoftDiversity &&
+      agent &&
+      prevAgentId &&
+      agent.id === prevAgentId
+    ) {
+      const alt = routeAgent(agents, phase, [agent.id]);
+      if (
+        alt &&
+        (alt.strengths[phase] ?? 0) >= (agent.strengths[phase] ?? 0) - 8
+      ) {
+        agent = alt;
+      }
     }
-    if (agent) used.add(agent.id);
+    if (agent) prevAgentId = agent.id;
 
     const id = `task-${nanoid(8)}`;
     tasks.push({
@@ -84,7 +103,7 @@ export function buildPipelineTasks(
       projectId,
       phase,
       title: meta.title,
-      description: `${meta.description} Target: ${concept.title}`,
+      description: `${meta.description} Target: ${concept.title} · Specialist: ${phaseAgentRationale(phase)}`,
       status: i === 0 ? "queued" : "pending",
       agentId: agent?.id ?? null,
       dependsOn: prevId ? [prevId] : [],
@@ -96,6 +115,9 @@ export function buildPipelineTasks(
       completedAt: null,
       estimatedMinutes: meta.minutes,
       order: i,
+      retryCount: 0,
+      maxRetries: phase === "implementation" || phase === "testing" ? 3 : 2,
+      lastError: null,
     });
     prevId = id;
   }
@@ -112,6 +134,14 @@ export function createProjectFromConcept(opts: {
   const now = new Date().toISOString();
   const tasks = buildPipelineTasks(id, opts.concept, opts.agents);
 
+  const assignmentLines = tasks
+    .map((t) => {
+      const name =
+        opts.agents.find((a) => a.id === t.agentId)?.name ?? "Unassigned";
+      return `- **${t.title}** → ${name} (${phaseAgentRationale(t.phase)})`;
+    })
+    .join("\n");
+
   return {
     id,
     name: opts.concept.title,
@@ -124,7 +154,9 @@ export function createProjectFromConcept(opts: {
       {
         id: `msg-${nanoid(6)}`,
         role: "system",
-        content: `Project created from concept "${opts.concept.title}". Pipeline assigned across ${tasks.filter((t) => t.agentId).length} agents.`,
+        content:
+          `Project created from concept "${opts.concept.title}".\n\n` +
+          `### Agent assignments (best-fit per stage)\n${assignmentLines}`,
         createdAt: now,
       },
     ],
@@ -144,5 +176,8 @@ export function createProjectFromConcept(opts: {
     createdAt: now,
     updatedAt: now,
     paused: false,
+    buildStatus: "pending",
+    unresolvedErrors: [],
+    resolutionGuide: null,
   };
 }

@@ -12,6 +12,17 @@ declare global {
         title: string;
         url: string;
       }) => Promise<{ ok: boolean; detail?: string }>;
+      /** In-app browser for local project apps (build/test visibility) */
+      openBrowserPreview?: (opts: {
+        url: string;
+        title?: string;
+      }) => Promise<{
+        ok: boolean;
+        detail?: string;
+        url?: string;
+        external?: boolean;
+      }>;
+      closeBrowserPreview?: () => Promise<{ ok: boolean; detail?: string }>;
       pty?: {
         start: (opts: {
           agent: string;

@@ -163,9 +163,21 @@ export function ProjectControls({
   project: Project;
   onAction: (action: string) => Promise<unknown>;
 }) {
+  const failed =
+    project.status === "failed" ||
+    project.tasks.some((t) => t.status === "failed");
+
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {project.paused || project.status === "paused" ? (
+      {failed ? (
+        <Button
+          size="sm"
+          onClick={() => onAction("retry_failed_stage")}
+          title="Re-run the failed pipeline stage with automatic recovery"
+        >
+          <Play className="h-3.5 w-3.5" /> Retry stage
+        </Button>
+      ) : project.paused || project.status === "paused" ? (
         <Button size="sm" onClick={() => onAction("resume")}>
           <Play className="h-3.5 w-3.5" /> Resume
         </Button>

@@ -70,12 +70,14 @@ export function NewsPanel({ className, onAsk }: Props) {
       else setLoading(true);
       setError(null);
       try {
+        // GitHub tab: always top 20 new projects (last 14 days) by stars
         const q = new URLSearchParams({
           category: cat,
-          limit: "28",
+          limit: cat === "github" ? "20" : "28",
         });
-        if (refresh) q.set("refresh", "1");
-        const res = await fetch(`/api/news?${q}`);
+        // Bust stale server cache when switching to GitHub or manual refresh
+        if (refresh || cat === "github") q.set("refresh", "1");
+        const res = await fetch(`/api/news?${q}`, { cache: "no-store" });
         const json = (await res.json()) as NewsResponse;
         if (!res.ok) {
           throw new Error(json.error || `News failed (${res.status})`);
@@ -92,7 +94,9 @@ export function NewsPanel({ className, onAsk }: Props) {
   );
 
   useEffect(() => {
-    void load({ cat: category });
+    // Clear previous tab data so old headlines never linger while loading
+    setData(null);
+    void load({ cat: category, refresh: category === "github" });
   }, [category, load]);
 
   // Auto-refresh every 5 minutes while panel is mounted
@@ -118,10 +122,12 @@ export function NewsPanel({ className, onAsk }: Props) {
           <Newspaper className="h-4 w-4 shrink-0 text-sky-300" />
           <div className="min-w-0">
             <div className="text-xs font-semibold tracking-[0.14em] uppercase text-foreground/90">
-              AI · Tech news
+              {category === "github" ? "GitHub · Top 20 new" : "AI · Tech · GitHub"}
             </div>
             <div className="truncate text-[10px] text-muted">
-              Priority: Anthropic · Claude · Grok · Codex · ChatGPT · Hermes
+              {category === "github"
+                ? "Created last 14 days · ranked by ★ stars"
+                : "Labs · AI · Tech · GitHub"}
               {data?.fetchedAt ? (
                 <span className="text-muted/70">
                   {" "}
@@ -205,9 +211,21 @@ export function NewsPanel({ className, onAsk }: Props) {
                         <span>{formatRelative(item.publishedAt)}</span>
                       </>
                     ) : null}
-                    {(item.priority ?? 0) >= 75 ? (
+                    {typeof item.stars === "number" && item.stars > 0 ? (
+                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-amber-200 ring-1 ring-amber-400/30">
+                        ★ {item.stars >= 1000
+                          ? `${(item.stars / 1000).toFixed(item.stars >= 10000 ? 0 : 1)}k`
+                          : item.stars}
+                      </span>
+                    ) : null}
+                    {(item.priority ?? 0) >= 75 && item.category !== "github" ? (
                       <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-violet-200 ring-1 ring-violet-400/30">
                         Priority
+                      </span>
+                    ) : null}
+                    {item.category === "github" ? (
+                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-emerald-200 ring-1 ring-emerald-400/30">
+                        Repo
                       </span>
                     ) : null}
                   </div>
@@ -252,7 +270,9 @@ export function NewsPanel({ className, onAsk }: Props) {
                         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted hover:bg-white/5 hover:text-sky-300"
                         onClick={() =>
                           onAsk(
-                            `Brief me on this headline: "${item.title}"`,
+                            item.category === "github"
+                              ? `Brief me on this GitHub project (${item.stars ?? "?"} stars): ${item.title} — ${item.url}`
+                              : `Brief me on this headline: "${item.title}"`,
                             item.url,
                           )
                         }

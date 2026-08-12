@@ -12,6 +12,7 @@ import { promisify } from "util";
 import type { Project } from "../types";
 import { projectWorkspaceDir } from "../workspace";
 import { scaffoldAppFromConcept } from "./scaffold";
+import { childProjectInstallEnv } from "./childEnv";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,40 +74,9 @@ function defaultCommand(appDir: string, kind: LaunchInfo["kind"]): string {
   return `cd "${appDir}" && npm run dev`;
 }
 
-/** PATH that works for both Terminal and packaged Electron on macOS */
+/** PATH + install env that works under packaged Electron (NODE_ENV=production). */
 function enrichedEnv(): NodeJS.ProcessEnv {
-  const home = os.homedir();
-  const extras = [
-    path.join(home, ".local", "bin"),
-    path.join(home, ".nvm", "current", "bin"),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-  ];
-  const pathParts = [
-    ...(process.env.PATH ? process.env.PATH.split(":") : []),
-    ...extras,
-  ];
-  // de-dupe
-  const seen = new Set<string>();
-  const PATH = pathParts
-    .filter((p) => {
-      if (!p || seen.has(p)) return false;
-      seen.add(p);
-      return true;
-    })
-    .join(":");
-
-  return {
-    ...process.env,
-    PATH,
-    BROWSER: "none",
-    FORCE_COLOR: "0",
-    npm_config_progress: "false",
-    npm_config_fund: "false",
-    npm_config_audit: "false",
-  };
+  return childProjectInstallEnv({ BROWSER: "none" });
 }
 
 function resolveNextBin(appDir: string): string | null {
@@ -298,11 +268,14 @@ async function ensureDeps(appDir: string, logFile: string): Promise<void> {
   }
   fs.appendFileSync(logFile, `\n[cortex] npm install in ${appDir}\n`);
   await new Promise<void>((resolve, reject) => {
-    const child = runInLoginShell("npm install --no-fund --no-audit --loglevel=error", {
-      cwd: appDir,
-      env: enrichedEnv(),
-      logFile,
-    });
+    const child = runInLoginShell(
+      "npm install --include=dev --no-fund --no-audit --loglevel=error",
+      {
+        cwd: appDir,
+        env: enrichedEnv(),
+        logFile,
+      },
+    );
     child.on("exit", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`npm install failed (exit ${code}). See log: ${logFile}`));

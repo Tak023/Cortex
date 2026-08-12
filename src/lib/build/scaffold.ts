@@ -8,6 +8,11 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import type { Concept, Project } from "../types";
 import { projectWorkspaceDir } from "../workspace";
+import {
+  childProjectInstallEnv,
+  childProjectBuildEnv,
+  NPM_INSTALL_ARGS,
+} from "./childEnv";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +21,9 @@ export type ScaffoldResult = {
   filesWritten: string[];
   installOk: boolean;
   installLog: string;
+  /** True when next build (or cli/api smoke) succeeded after scaffold */
+  buildOk?: boolean;
+  buildLog?: string;
   runHint: string;
   summary: string;
 };
@@ -136,29 +144,142 @@ phases live in \`../artifacts/\`.
 
   let installOk = false;
   let installLog = "skipped";
+  let buildOk = false;
+  let buildLog = "skipped";
+
   if (options.runInstall !== false && fs.existsSync(path.join(appDir, "package.json"))) {
-    try {
-      const { stdout, stderr } = await execFileAsync(
-        "npm",
-        ["install", "--no-fund", "--no-audit", "--loglevel=error"],
-        {
-          cwd: appDir,
-          timeout: 180_000,
-          env: { ...process.env, npm_config_progress: "false" },
-          maxBuffer: 5 * 1024 * 1024,
-        },
-      );
-      installOk = true;
-      installLog = `${stdout}\n${stderr}`.trim().slice(0, 2000) || "npm install ok";
-    } catch (e) {
-      installOk = false;
-      installLog =
-        e instanceof Error
-          ? `${e.message}\n${(e as { stdout?: string; stderr?: string }).stderr ?? ""}`.slice(
-              0,
-              2000,
-            )
-          : String(e);
+    // Up to 2 install attempts — incomplete installs cause "generate is not a function"
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const { stdout, stderr } = await execFileAsync(
+          "npm",
+          [...NPM_INSTALL_ARGS],
+          {
+            cwd: appDir,
+            timeout: 240_000,
+            env: childProjectInstallEnv(),
+            maxBuffer: 8 * 1024 * 1024,
+          },
+        );
+        installLog = `${stdout}\n${stderr}`.trim().slice(0, 2000) || "npm install ok";
+        const needsNext = kind === "web" || kind === "docker";
+        const nextPresent = fs.existsSync(
+          path.join(appDir, "node_modules", "next", "package.json"),
+        );
+        const tsPresent = fs.existsSync(
+          path.join(appDir, "node_modules", "typescript", "package.json"),
+        );
+        // Require typescript for Next TS apps (skipped when NODE_ENV=production)
+        installOk = needsNext ? nextPresent && tsPresent : true;
+        if (needsNext && nextPresent && !tsPresent) {
+          installLog +=
+            "\n[cortex] typescript missing (devDependency) — reinstall with --include=dev";
+        }
+        if (installOk) break;
+        installLog += "\n[cortex] next missing after install — retrying clean";
+        try {
+          fs.rmSync(path.join(appDir, "node_modules"), {
+            recursive: true,
+            force: true,
+          });
+          fs.rmSync(path.join(appDir, "package-lock.json"), { force: true });
+        } catch {
+          /* ignore */
+        }
+      } catch (e) {
+        installOk = false;
+        installLog =
+          e instanceof Error
+            ? `${e.message}\n${(e as { stdout?: string; stderr?: string }).stderr ?? ""}`.slice(
+                0,
+                2000,
+              )
+            : String(e);
+        try {
+          fs.rmSync(path.join(appDir, "node_modules"), {
+            recursive: true,
+            force: true,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    // Build smoke for web/docker so Testing inherits a known-good tree
+    if (installOk && (kind === "web" || kind === "docker")) {
+      try {
+        const { stdout, stderr } = await execFileAsync(
+          "npx",
+          ["--no-install", "next", "build"],
+          {
+            cwd: appDir,
+            timeout: 300_000,
+            env: childProjectBuildEnv(),
+            maxBuffer: 8 * 1024 * 1024,
+          },
+        );
+        buildOk = true;
+        buildLog = `${stdout}\n${stderr}`.trim().slice(0, 2000) || "next build ok";
+      } catch (e) {
+        buildOk = false;
+        buildLog =
+          e instanceof Error
+            ? `${e.message}\n${(e as { stdout?: string; stderr?: string }).stderr ?? ""}`.slice(
+                0,
+                2500,
+              )
+            : String(e);
+        // Recovery: reinstall WITH devDependencies (Electron NODE_ENV=production skips them)
+        if (
+          /generate is not a function|next: command not found|TypeScript|typescript|required package/i.test(
+            buildLog,
+          )
+        ) {
+          try {
+            fs.rmSync(path.join(appDir, "node_modules"), {
+              recursive: true,
+              force: true,
+            });
+            fs.rmSync(path.join(appDir, "package-lock.json"), { force: true });
+            fs.rmSync(path.join(appDir, ".next"), {
+              recursive: true,
+              force: true,
+            });
+            await execFileAsync("npm", [...NPM_INSTALL_ARGS], {
+              cwd: appDir,
+              timeout: 240_000,
+              env: childProjectInstallEnv(),
+              maxBuffer: 8 * 1024 * 1024,
+            });
+            const retry = await execFileAsync(
+              "npx",
+              ["--no-install", "next", "build"],
+              {
+                cwd: appDir,
+                timeout: 300_000,
+                env: childProjectBuildEnv(),
+                maxBuffer: 8 * 1024 * 1024,
+              },
+            );
+            buildOk = true;
+            buildLog =
+              `recovered after clean reinstall (with devDependencies)\n${retry.stdout}\n${retry.stderr}`.slice(
+                0,
+                2000,
+              );
+            installOk = true;
+          } catch (e2) {
+            buildOk = false;
+            buildLog +=
+              "\n[recovery failed] " +
+              (e2 instanceof Error ? e2.message : String(e2)).slice(0, 800);
+          }
+        }
+      }
+    } else if (kind === "cli" || kind === "api") {
+      buildOk = installOk;
+      buildLog = "n/a for cli/api";
     }
   }
 
@@ -174,10 +295,16 @@ phases live in \`../artifacts/\`.
     filesWritten: files,
     installOk,
     installLog,
+    buildOk,
+    buildLog,
     runHint,
-    summary: `Scaffolded ${kind} app with ${files.length} files at ${appDir}${
-      installOk ? " (npm install succeeded)" : " (npm install skipped or failed — run manually)"
-    }`,
+    summary: `Scaffolded ${kind} app with ${files.length} files at ${appDir}` +
+      (installOk ? " · install ✓" : " · install ✗") +
+      (kind === "web" || kind === "docker"
+        ? buildOk
+          ? " · build ✓"
+          : " · build ✗"
+        : ""),
   };
 }
 
@@ -198,10 +325,12 @@ function scaffoldDockerViewer(
         version: "0.1.0",
         private: true,
         scripts: {
-          dev: "next dev -H 127.0.0.1 -p 3456",
-          build: "next build",
-          start: "next start -H 127.0.0.1 -p 3456",
-          test: "node -e \"const fs=require('fs'); if(!fs.existsSync('app/page.tsx')&&!fs.existsSync('lib/docker.ts')) process.exit(1); console.log('smoke ok')\"",
+          dev: "npx next dev -H 127.0.0.1 -p 3456",
+          build: "npx next build",
+          start: "npx next start -H 127.0.0.1 -p 3456",
+          test: "npx vitest run && npx playwright test",
+          "test:unit": "npx vitest run",
+          "test:e2e": "npx playwright test",
         },
         dependencies: {
           next: "15.2.4",
@@ -368,10 +497,12 @@ function scaffoldWebApp(
         version: "0.1.0",
         private: true,
         scripts: {
-          dev: "next dev -H 127.0.0.1 -p 3456",
-          build: "next build",
-          start: "next start -H 127.0.0.1 -p 3456",
-          test: "node -e \"const fs=require('fs'); if(!fs.existsSync('app/page.tsx')) process.exit(1); console.log('smoke ok')\"",
+          dev: "npx next dev -H 127.0.0.1 -p 3456",
+          build: "npx next build",
+          start: "npx next start -H 127.0.0.1 -p 3456",
+          test: "npx vitest run && npx playwright test",
+          "test:unit": "npx vitest run",
+          "test:e2e": "npx playwright test",
         },
         dependencies: {
           next: "15.2.4",
@@ -383,6 +514,13 @@ function scaffoldWebApp(
           "@types/react": "^19",
           "@types/react-dom": "^19",
           typescript: "^5",
+          vitest: "^3.0.5",
+          jsdom: "^26.0.0",
+          "@testing-library/react": "^16.2.0",
+          "@testing-library/jest-dom": "^6.6.3",
+          "@testing-library/dom": "^10.4.0",
+          "@vitejs/plugin-react": "^4.3.4",
+          "@playwright/test": "^1.50.1",
         },
       },
       null,
@@ -413,7 +551,7 @@ function scaffoldWebApp(
           plugins: [{ name: "next" }],
           paths: { "@/*": ["./*"] },
         },
-        include: ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+        include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
         exclude: ["node_modules"],
       },
       null,
@@ -431,7 +569,55 @@ export default nextConfig;
 `,
     files,
   );
-  write(appDir, "next-env.d.ts", `/// <reference types="next" />\n`, files);
+  write(
+    appDir,
+    "next-env.d.ts",
+    `/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+`,
+    files,
+  );
+
+  write(
+    appDir,
+    "lib/concept.ts",
+    `/** App concept — generated by Cortex for unit testing & UI. */
+export type AppConcept = {
+  title: string;
+  summary: string;
+  features: string[];
+  stack: string[];
+};
+
+export const concept: AppConcept = ${JSON.stringify(
+      {
+        title: concept.title,
+        summary: concept.summary,
+        features: concept.features?.length ? concept.features : ["Core MVP flow"],
+        stack: concept.stack?.length
+          ? concept.stack
+          : ["Next.js", "TypeScript"],
+      },
+      null,
+      2,
+    )};
+
+export function featureCount(): number {
+  return concept.features.length;
+}
+
+export function hasFeature(name: string): boolean {
+  const n = name.toLowerCase();
+  return concept.features.some((f) => f.toLowerCase().includes(n));
+}
+
+export function stackIncludes(part: string): boolean {
+  const n = part.toLowerCase();
+  return concept.stack.some((s) => s.toLowerCase().includes(n));
+}
+`,
+    files,
+  );
 
   write(
     appDir,
@@ -444,38 +630,58 @@ h1{font-size:1.5rem} .muted{color:#999} ul{line-height:1.6}
     files,
   );
 
+  // Inline metadata strings at scaffold time — avoids Next metadata/generate
+  // edge cases when importing concept into the layout module.
+  const metaTitle = JSON.stringify(
+    (concept.title || "App").slice(0, 60) || "App",
+  );
+  const metaDesc = JSON.stringify((concept.summary || "").slice(0, 160));
   write(
     appDir,
     "app/layout.tsx",
-    `export const metadata = { title: ${JSON.stringify(concept.title.slice(0, 60))} };
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (<html lang="en"><body><main>{children}</main></body></html>);
+    `import type { Metadata } from "next";
+import type { ReactNode } from "react";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: ${metaTitle},
+  description: ${metaDesc},
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <main>{children}</main>
+      </body>
+    </html>
+  );
 }
 `,
     files,
   );
 
-  const featureLis = (concept.features ?? [])
-    .map((f) => `<li>${escapeJsx(f)}</li>`)
-    .join("\n");
-
   write(
     appDir,
     "app/page.tsx",
-    `export default function Page() {
+    `import { concept } from "../lib/concept";
+
+export default function Page() {
   return (
     <div>
-      <h1>${escapeJsx(concept.title)}</h1>
-      <p className="muted">${escapeJsx(concept.summary)}</p>
+      <h1>{concept.title}</h1>
+      <p className="muted">{concept.summary}</p>
       <div className="card">
         <h2>Features</h2>
         <ul>
-          ${featureLis || "<li>Core MVP flow</li>"}
+          {concept.features.map((f) => (
+            <li key={f}>{f}</li>
+          ))}
         </ul>
       </div>
       <div className="card">
         <h2>Stack</h2>
-        <p>${escapeJsx((concept.stack ?? ["Next.js", "TypeScript"]).join(" · "))}</p>
+        <p>{concept.stack.join(" · ")}</p>
       </div>
       <p className="muted">Scaffolded by Cortex — extend this app from the pipeline plan in ../artifacts.</p>
     </div>

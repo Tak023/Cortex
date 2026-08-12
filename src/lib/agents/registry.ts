@@ -450,7 +450,7 @@ export const DEFAULT_AGENTS: Agent[] = [
     slug: "jarvis-research",
     type: "local",
     roles: ["researcher", "generalist"],
-    status: "offline",
+    status: "idle",
     capabilities: [
       "openjarvis",
       "deep-research",

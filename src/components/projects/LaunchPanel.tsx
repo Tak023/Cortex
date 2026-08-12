@@ -5,10 +5,12 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
+  Eye,
   FolderOpen,
   Loader2,
   Play,
   Rocket,
+  ScanSearch,
   Terminal,
 } from "lucide-react";
 import type { Project } from "@/lib/types";
@@ -47,7 +49,9 @@ export function LaunchPanel({
   ) => Promise<ActionResult | unknown>;
 }) {
   const [launch, setLaunch] = useState<LaunchInfo | null>(null);
-  const [busy, setBusy] = useState<"launch" | "build" | null>(null);
+  const [busy, setBusy] = useState<
+    "launch" | "build" | "inspect" | "preview" | null
+  >(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -108,6 +112,67 @@ export function LaunchPanel({
     }
   };
 
+  /** Open local app in Cortex in-app browser (Electron) or system browser */
+  const handlePreview = async () => {
+    setBusy("preview");
+    setError(null);
+    try {
+      const res = (await onAction("open_browser_preview", {
+        url: info?.launchUrl || project.launchUrl || url,
+      })) as ActionResult & { url?: string };
+      const target =
+        res.url || info?.launchUrl || project.launchUrl || url;
+      if (typeof window !== "undefined" && window.cortexDesktop?.openBrowserPreview) {
+        const opened = await window.cortexDesktop.openBrowserPreview({
+          url: target,
+          title: `${project.name} — preview`,
+        });
+        if (!opened.ok) {
+          window.open(target, "_blank", "noopener,noreferrer");
+        }
+        showToast(opened.detail || `Preview: ${target}`);
+      } else {
+        window.open(target, "_blank", "noopener,noreferrer");
+        showToast(`Opened browser: ${target}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Preview failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Playwright-backed inspection: console errors, page errors, screenshot */
+  const handleInspect = async () => {
+    setBusy("inspect");
+    setError(null);
+    try {
+      // Open visible preview first when desktop is available
+      if (window.cortexDesktop?.openBrowserPreview) {
+        await window.cortexDesktop.openBrowserPreview({
+          url,
+          title: `${project.name} — inspect`,
+        });
+      }
+      const res = (await onAction("inspect_browser", {
+        headed: true,
+      })) as ActionResult & {
+        browser?: { ok?: boolean; summary?: string; findings?: unknown[] };
+      };
+      if (res.launch) setLaunch(res.launch);
+      if (res.error) {
+        setError(res.error);
+      } else {
+        showToast(res.message || res.browser?.summary || "Browser inspection complete");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Browser inspect failed");
+    } finally {
+      setBusy(null);
+      void refreshInfo();
+    }
+  };
+
   const info = launch;
   const url = info?.launchUrl || project.launchUrl || "http://127.0.0.1:3456";
   const cmd =
@@ -160,6 +225,34 @@ export function LaunchPanel({
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : null}
               Rebuild source
+            </Button>
+            <Button
+              size="md"
+              variant="secondary"
+              disabled={busy !== null || !appExists}
+              onClick={handlePreview}
+              title="Open the app in Cortex’s in-app browser (local only)"
+            >
+              {busy === "preview" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+              View browser
+            </Button>
+            <Button
+              size="md"
+              variant="secondary"
+              disabled={busy !== null || !appExists}
+              onClick={handleInspect}
+              title="Capture console/page errors and a screenshot for test recovery"
+            >
+              {busy === "inspect" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ScanSearch className="h-4 w-4" />
+              )}
+              Inspect browser
             </Button>
           </div>
         </div>

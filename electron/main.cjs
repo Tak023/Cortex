@@ -78,9 +78,89 @@ function loadCortexEnv() {
 }
 
 let mainWindow = null;
+/** Dedicated window for viewing generated project apps during build/test */
+let previewWindow = null;
 let stopping = false;
 /** Base URL of the local Next server (set after resolveServerUrl). */
 let serverBaseUrl = DEV_URL;
+
+/**
+ * Open (or focus) an in-app browser window for a local project URL.
+ * Used during build/test so agents and users can see live runtime errors.
+ */
+function openProjectBrowserPreview(opts = {}) {
+  const rawUrl = String(opts.url || "").trim();
+  if (!rawUrl) {
+    return { ok: false, detail: "Missing url" };
+  }
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { ok: false, detail: "Invalid url" };
+  }
+  // Only allow loopback previews inside Cortex (security)
+  if (
+    parsed.hostname !== "127.0.0.1" &&
+    parsed.hostname !== "localhost"
+  ) {
+    shell.openExternal(rawUrl);
+    return {
+      ok: true,
+      detail: "Opened external URL in system browser",
+      external: true,
+    };
+  }
+
+  const title = String(opts.title || "App preview — Cortex");
+  if (previewWindow && !previewWindow.isDestroyed()) {
+    previewWindow.setTitle(title);
+    previewWindow.loadURL(rawUrl);
+    previewWindow.focus();
+    return { ok: true, detail: "Refreshed in-app browser preview", url: rawUrl };
+  }
+
+  previewWindow = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 640,
+    minHeight: 480,
+    title,
+    backgroundColor: "#0a0a0f",
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      // Allow local apps to use modern web APIs while previewing
+      webSecurity: true,
+    },
+  });
+
+  previewWindow.once("ready-to-show", () => {
+    previewWindow?.show();
+  });
+
+  // Surface console errors from the previewed app into main process logs
+  // (helps diagnose build/test failures when headed inspection is used).
+  previewWindow.webContents.on("console-message", (_e, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.warn(
+        `[cortex-preview console L${level}] ${message} (${sourceId}:${line})`,
+      );
+    }
+  });
+  previewWindow.webContents.on("did-fail-load", (_e, code, desc, validatedURL) => {
+    console.warn(`[cortex-preview load fail] ${code} ${desc} ${validatedURL}`);
+  });
+
+  previewWindow.on("closed", () => {
+    previewWindow = null;
+  });
+
+  previewWindow.loadURL(rawUrl);
+  return { ok: true, detail: "Opened in-app browser preview", url: rawUrl };
+}
 
 function isLocalAppUrl(url) {
   try {
@@ -224,6 +304,33 @@ function registerIpc() {
   ipcMain.handle("pty:kill", (_event, opts = {}) => {
     const ok = ptyHost.kill(String(opts.id || ""));
     return { ok };
+  });
+
+  // In-app browser for project apps (build/test visibility)
+  ipcMain.handle("browser:open-preview", (_event, opts = {}) => {
+    try {
+      return openProjectBrowserPreview(opts);
+    } catch (e) {
+      return {
+        ok: false,
+        detail: e instanceof Error ? e.message : String(e),
+      };
+    }
+  });
+
+  ipcMain.handle("browser:close-preview", () => {
+    try {
+      if (previewWindow && !previewWindow.isDestroyed()) {
+        previewWindow.close();
+      }
+      previewWindow = null;
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        detail: e instanceof Error ? e.message : String(e),
+      };
+    }
   });
 }
 
@@ -446,7 +553,13 @@ async function createWindow(serverUrl) {
       url.startsWith("http://127.0.0.1") ||
       url.startsWith("http://localhost")
     ) {
-      return { action: "allow" };
+      // Prefer dedicated preview window so build/test apps are easy to watch
+      try {
+        openProjectBrowserPreview({ url, title: "Local app — Cortex" });
+        return { action: "deny" };
+      } catch {
+        return { action: "allow" };
+      }
     }
     shell.openExternal(url);
     return { action: "deny" };
@@ -493,15 +606,38 @@ if (!gotLock) {
         }
       }
 
-      // Allow microphone / media for getUserMedia + MediaRecorder STT
+      // Permissions for voice STT + local app previews during build/test.
+      // Localhost project apps may request clipboard, notifications, etc.
+      const allowPerm = (permission) =>
+        permission === "media" ||
+        permission === "microphone" ||
+        permission === "mediaKeySystem" ||
+        permission === "display-capture" ||
+        permission === "clipboard-read" ||
+        permission === "clipboard-sanitized-write" ||
+        permission === "notifications" ||
+        permission === "fullscreen" ||
+        permission === "pointerLock" ||
+        permission === "openExternal" ||
+        permission === "storage-access" ||
+        permission === "window-management";
+
       session.defaultSession.setPermissionRequestHandler(
-        (_wc, permission, callback) => {
-          if (
-            permission === "media" ||
-            permission === "microphone" ||
-            permission === "mediaKeySystem" ||
-            permission === "display-capture"
-          ) {
+        (wc, permission, callback, details) => {
+          const requestingUrl = String(details?.requestingUrl || "");
+          const isLocal =
+            requestingUrl.includes("127.0.0.1") ||
+            requestingUrl.includes("localhost") ||
+            (() => {
+              try {
+                const u = new URL(wc.getURL());
+                return u.hostname === "127.0.0.1" || u.hostname === "localhost";
+              } catch {
+                return false;
+              }
+            })();
+
+          if (allowPerm(permission) || (isLocal && permission !== "geolocation")) {
             callback(true);
             return;
           }
@@ -509,12 +645,25 @@ if (!gotLock) {
         },
       );
       session.defaultSession.setPermissionCheckHandler(
-        (_wc, permission) =>
-          permission === "media" ||
-          permission === "microphone" ||
-          permission === "mediaKeySystem" ||
-          permission === "display-capture",
+        (wc, permission) => {
+          if (allowPerm(permission)) return true;
+          try {
+            const u = new URL(wc?.getURL?.() || "");
+            if (
+              (u.hostname === "127.0.0.1" || u.hostname === "localhost") &&
+              permission !== "geolocation"
+            ) {
+              return true;
+            }
+          } catch {
+            /* ignore */
+          }
+          return false;
+        },
       );
+
+      // Allow Cortex + localhost project apps to open popups/windows
+      session.defaultSession.setDevicePermissionHandler(() => true);
 
       setDataDir();
       buildMenu();
