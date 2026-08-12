@@ -9,7 +9,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
 | **Version** | 0.2.1 |
-| **License** | See [License](#license) |
+| **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
   <img src="Resources/Cortex.jpg" alt="Cortex — Agentic OS" width="420" />
@@ -74,6 +74,18 @@ Highlights since the initial 0.1.x release:
 - Concept generation now **reports its source** (live Grok vs. local synthesis) and the fallback reason in the ideas page and activity feed, instead of silently returning canned concepts; local synthesis derives features and stacks from the idea's domain
 - Grok chat model is configurable via `JARVIS_GROK_MODEL` / `XAI_CHAT_MODEL` (default `grok-4.5`)
 
+### Second brain & knowledge graph (unreleased)
+
+- **Obsidian vault integration** — point Cortex at a local Markdown vault (default `~/Documents/hermes-second-brain`) and it becomes **shared long-term memory** across agents:
+  - **Jarvis** grounds answers in your own notes before reaching for live search
+  - The **research phase** seeds itself with prior notes on the topic instead of starting cold
+  - Finished projects are **written back** as `projects/<name>.md`, and agent actions append to the vault's `log.md` timeline
+- **Graphify page** (`/graphify`) — interactive canvas view of the vault, with two layers that normalize to one shape:
+  - **Semantic** — graphify's `graphify-out/graph.json`: concepts, rationale, Louvain communities, confidence-scored edges, and hyperedges
+  - **Live links** — derived from Markdown on every request (`[[wikilinks]]`, `#tags`, folders). No Python, no LLM, no build step; used automatically when graphify has not been run
+  - Node-type legend, community focus, concept search, group relationships, a detail panel with rationale and neighbors, and **core abstractions** — the most connected nodes, which graphify calls *god nodes*
+- Writes are constrained to the vault's own contract: `raw/` is **refused as read-only** and paths outside the vault are rejected
+
 ---
 
 ## Features
@@ -92,6 +104,14 @@ Highlights since the initial 0.1.x release:
 - Trending GitHub tab: top-20 new repos of the last 14 days by stars
 - MCP server catalog with config export
 - Speech-to-text input (Whisper-compatible backend)
+
+### Second brain (Obsidian vault)
+- Local Markdown vault as **shared agent memory** — keyword search over notes, grounded Jarvis answers, research seeded from prior knowledge
+- Project outcomes written back to `projects/`; agent activity appended to `log.md`
+- `raw/` enforced read-only; writes outside the vault refused
+- **Graphify** graph view (`/graphify`) with a semantic layer (graphify build) and a live wikilink layer (always current)
+- Communities, god-node ranking, rationale, hyperedges, and concept search over the graph
+- Toggle and vault path in **Settings**; `CORTEX_VAULT_DIR` overrides
 
 ### Ideas → Concepts → Projects
 - Free-form idea / problem statement input
@@ -208,12 +228,15 @@ Each phase picks an agent using:
 │  · Concept generation (Grok / local synthesis)               │
 │  · Pipeline builder + orchestrator tick loop                 │
 │  · Shared memory · artifacts · activity bus                  │
-└────────────────────────────┬─────────────────────────────────┘
-                             │
-┌────────────────────────────▼─────────────────────────────────┐
-│  Persistence  ·  JSON store (data/state.json)                │
-│  Desktop: OS userData · Dev/web: ./data                      │
-└──────────────────────────────────────────────────────────────┘
+└──────────────┬──────────────────────────┬──────────────────┘
+               │                          │
+┌──────────────▼────────────┐ ┌───────────▼────────────────────┐
+│  Persistence · JSON store │ │  Second brain · Obsidian vault │
+│  (data/state.json)        │ │  · Markdown notes on disk      │
+│  Desktop: OS userData     │ │  · Search → grounding/research │
+│  Dev/web: ./data          │ │  · Writes: projects/, log.md   │
+└───────────────────────────┘ │  · Graph: graphify | wikilinks │
+                              └────────────────────────────────┘
 
 Desktop shell (Electron)
   · Main process starts Next standalone server on 127.0.0.1
@@ -361,6 +384,7 @@ XAI_API_KEY=
 | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | No | Raises GitHub API rate limits for the trending-repos tab |
 | `WHISPER_API_KEY` / `WHISPER_BASE_URL` / `WHISPER_MODEL` | No | Speech-to-text backend for Jarvis voice input |
 | `TAVILY_API_KEY` | No | Optional search fallback for live answers |
+| `CORTEX_VAULT_DIR` | No | Path to the Obsidian second brain (supports `~`, default `~/Documents/hermes-second-brain`); overrides the Settings value |
 | `CORTEX_DATA_DIR` | No | Override state directory (set automatically by desktop) |
 | `CORTEX_PORT` | No | Packaged server port (default `47832`) |
 | `CORTEX_URL` | No | Dev desktop URL (default `http://127.0.0.1:3000`) |
@@ -373,6 +397,7 @@ XAI_API_KEY=
 - Auto-approve gates (demo mode)  
 - Default LM Studio model name  
 - Per-agent enable flag, model string, system prompt  
+- **Enable second brain** + **Vault path** (active only when the vault exists on disk)  
 
 ---
 
@@ -394,6 +419,7 @@ XAI_API_KEY=
 |-------|---------|
 | `/` | Command Center — metrics, live projects, activity |
 | `/jarvis` | Jarvis — voice/chat assistant, live data, news + GitHub trending |
+| `/graphify` | Second-brain graph — concepts, communities, rationale, god nodes |
 | `/agents` | Agent fleet, search, filters, controls |
 | `/agents/terminal` | Embedded terminals for launched CLI agents |
 | `/mcp` | MCP server catalog + config export |
@@ -418,11 +444,12 @@ Cortex/
 ├── public/branding/           # Served brand image
 ├── src/
 │   ├── app/                   # Pages + API routes
-│   ├── components/            # UI (layout, agents, ideas, projects, …)
+│   ├── components/            # UI (layout, agents, ideas, projects, vault, …)
 │   └── lib/
 │       ├── agents/            # Registry + router
 │       ├── orchestration/     # Pipeline + engine
 │       ├── ai/                # Grok client + phase synthesis
+│       ├── vault/             # Second brain: search/write + graph layers
 │       ├── store.ts           # Local persistence
 │       └── types.ts           # Domain types
 ├── data/                      # Dev state (gitignored)
@@ -461,6 +488,8 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 | `GET` | `/api/mcp/export` | Export MCP client config |
 | `GET/POST` | `/api/integrations/jarvis` | Jarvis live-data integration |
 | `GET/POST` | `/api/speech/transcribe` | Speech-to-text (Whisper-compatible) |
+| `GET` | `/api/vault` | Second-brain status; keyword search with `?q=` |
+| `GET` | `/api/vault/graph` | Knowledge graph; `?source=wikilinks` forces the live layer |
 
 ---
 
@@ -470,7 +499,9 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 - State is stored as JSON on disk.  
 - Optional AI calls (Grok) only happen when `XAI_API_KEY` is configured; idea text is then sent to xAI for concept generation.  
 - Without a key, concept generation stays **fully local**.  
-- Desktop app listens on **localhost only**.
+- Desktop app listens on **localhost only**.  
+- The **second brain** is read from and written to entirely on disk — no vault content is uploaded. Note snippets do enter prompts sent to a cloud model when you use Jarvis or the pipeline with a cloud agent configured; disable the vault in Settings to prevent that.  
+- Vault writes are limited to `projects/` and `log.md`; `raw/` is refused as read-only and paths outside the vault are rejected.
 
 ---
 
@@ -506,6 +537,18 @@ env -u __NEXT_PRIVATE_STANDALONE_CONFIG -u NODE_ENV -u PORT -u HOSTNAME npx next
 
 Concept generation shows its **source** in the ideas page and activity feed. If it says local fallback, your `XAI_API_KEY` is missing, invalid, or out of credits (check [console.x.ai](https://console.x.ai)) — Cortex then synthesizes concepts locally from the idea's domain instead of calling Grok.
 
+### Graphify shows “Live links” instead of the semantic graph
+
+The semantic layer needs `graphify-out/graph.json` inside the vault. Until that exists, Cortex falls back to the live wikilink layer and says so. Run the graphify pipeline over the vault, then hit **Rescan**. The page reports the path it looked for.
+
+### Graphify is empty / “Vault unavailable”
+
+Cortex treats a directory as a vault only if it exists **and** contains a root `CLAUDE.md` or an `.obsidian/` folder. Check **Settings → Vault path**, or set `CORTEX_VAULT_DIR`. Confirm with:
+
+```bash
+curl -s http://127.0.0.1:3000/api/vault | head -c 300
+```
+
 ### Port already in use (dev)
 
 Desktop production uses port **47832**. Dev web uses **3000**. Free the port or set `CORTEX_PORT`.
@@ -533,6 +576,7 @@ Ensure nothing else is bound to the Cortex port, then relaunch. Use **View → T
 - [ ] Real CLI / API adapters: Hermes, Claude Code, Codex, LM Studio  
 - [ ] SSE / WebSocket activity stream (replace polling)  
 - [ ] In-app API key management for packaged desktop  
+- [ ] Trigger graphify builds from inside Cortex (today the semantic layer is only as fresh as the last external build)  
 - [ ] SQLite / libSQL for larger workspaces  
 - [ ] Parallel workstreams within a phase  
 - [ ] Code signing + notarization for macOS distribution  
@@ -582,14 +626,14 @@ exists before tagging a release.
 
 Copyright © Cortex contributors.
 
-This project is provided for local development and evaluation.  
-Update this section with your chosen open-source license (e.g. MIT, Apache-2.0) before public release.
+This project is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html).
+
+You may redistribute and/or modify it under the terms of the GPL-3.0.  
+This program is distributed in the hope that it will be useful, but **without any warranty**; without even the implied warranty of merchantability or fitness for a particular purpose. See the [LICENSE](LICENSE) file for the full text.
 
 ```text
-SPDX-License-Identifier: UNLICENSED
+SPDX-License-Identifier: GPL-3.0-only
 ```
-
-Replace with a proper `LICENSE` file when you publish.
 
 ---
 

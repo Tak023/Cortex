@@ -2,6 +2,7 @@
   "name": "cortex",
   "version": "0.2.1",
   "private": true,
+  "license": "GPL-3.0-only",
   "description": "Cortex — Agentic OS control plane (desktop + local web)",
   "author": "Cortex",
   "main": "electron/main.cjs",
