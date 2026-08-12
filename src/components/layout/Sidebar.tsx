@@ -12,6 +12,7 @@ import {
   Activity,
   Settings,
   Monitor,
+  Network,
   Sparkles,
   Plug,
   Loader2,
@@ -56,6 +57,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/", label: "Command", icon: LayoutDashboard },
       { href: "/jarvis", label: "Jarvis", icon: Sparkles },
+      { href: "/graphify", label: "Graphify", icon: Network },
       { href: "/agents", label: "Agents", icon: Bot },
       { href: "/ideas", label: "Ideas", icon: Lightbulb },
       { href: "/projects", label: "Projects", icon: FolderKanban },
