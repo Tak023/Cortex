@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.4 |
+| **Version** | 0.2.5 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -96,6 +96,12 @@ Highlights since the initial 0.1.x release:
 - States read at a glance — particles **converge inward** when listening, a violet arc sweeps while thinking, and the shell **spikes on speech amplitude**
 - Replaces the flat single-hue ring HUD (hexagram core, micro-labels, radar sweep). Same host contract, so `JarvisAvatar.tsx` is unchanged
 - Fixes a mount flicker: loading with a non-idle state used to ease up from `idle` instead of starting there
+
+### Hydration fix (0.2.5)
+
+- Fixes a React **hydration mismatch on `/jarvis`** that forced the whole page tree to be discarded and re-rendered on every load. Mic availability (`typeof window` dependent) was read during render, so the server said "unavailable" and the client "available" on first paint — flipping the orb between `<div>` and `<button>`
+- The capability is now read through `useSyncExternalStore` with a server snapshot, so the first client render matches the delivered HTML
+- Also stops an invalid `disabled` attribute rendering on a `div`
 
 ---
 
