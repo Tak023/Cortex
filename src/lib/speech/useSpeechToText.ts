@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   isMicRecordingAvailable,
   pickRecorderMimeType,
@@ -9,6 +15,20 @@ import {
 } from "./transcribe";
 
 export type SpeechMode = "builtin" | "external" | "auto";
+
+/**
+ * Mic availability is a browser capability, so it cannot be known during SSR.
+ * Reading it directly in render made the server say "unavailable" and the
+ * client say "available" on the very first paint, which broke hydration
+ * wherever the value drives markup (the Jarvis orb switched div → button).
+ *
+ * useSyncExternalStore hydrates against the server snapshot and then re-renders
+ * with the real value, so the first client render matches the HTML. The
+ * capability never changes after load, so subscribe is a no-op.
+ */
+const subscribeNever = () => () => {};
+const getMicSnapshot = () => isMicRecordingAvailable();
+const getMicServerSnapshot = () => false;
 
 export type SpeechStatus =
   | "idle"
@@ -47,7 +67,11 @@ export function useSpeechToText(opts: {
   const intentionalStop = useRef(false);
   const processingRef = useRef(false);
 
-  const builtinAvailable = isMicRecordingAvailable();
+  const builtinAvailable = useSyncExternalStore(
+    subscribeNever,
+    getMicSnapshot,
+    getMicServerSnapshot,
+  );
 
   const defaultMode = (): "builtin" | "external" => {
     if (preferredMode === "external") return "external";

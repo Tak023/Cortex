@@ -104,7 +104,8 @@ export function JarvisAvatar({
     <Tag
       type={interactive ? "button" : undefined}
       onClick={interactive ? onClick : undefined}
-      disabled={disabled}
+      // `disabled` is not valid on a div, and Tag is only a button when interactive
+      disabled={interactive ? disabled : undefined}
       className={cn(
         "group relative flex w-full flex-col items-center gap-3 outline-none",
         interactive &&
