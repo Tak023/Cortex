@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.3 |
+| **Version** | 0.2.4 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -89,6 +89,13 @@ Highlights since the initial 0.1.x release:
 ### Version indicator (0.2.3)
 
 - The **running version** is shown at the bottom of the left sidebar, so a packaged build always identifies itself. Inlined from `package.json` at build time as `NEXT_PUBLIC_APP_VERSION` — no runtime lookup
+
+### Jarvis avatar redesign (0.2.4)
+
+- The Jarvis orb is now a **volumetric neural core**: a lit sphere (fresnel rim, off-axis highlight) inside a rotating particle shell whose points link into constellations as they pass near one another
+- States read at a glance — particles **converge inward** when listening, a violet arc sweeps while thinking, and the shell **spikes on speech amplitude**
+- Replaces the flat single-hue ring HUD (hexagram core, micro-labels, radar sweep). Same host contract, so `JarvisAvatar.tsx` is unchanged
+- Fixes a mount flicker: loading with a non-idle state used to ease up from `idle` instead of starting there
 
 ---
 
