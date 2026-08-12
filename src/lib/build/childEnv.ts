@@ -11,6 +11,38 @@
 import os from "os";
 import path from "path";
 
+/**
+ * Host env vars that must never reach scaffolded-app child processes.
+ *
+ * The packaged Cortex server (Next standalone) sets
+ * `__NEXT_PRIVATE_STANDALONE_CONFIG`; if a child `next build` inherits it,
+ * Next skips loading the app's own next.config and JSON-parses the HOST
+ * config instead — functions like `generateBuildId` are lost in
+ * serialization, and the build dies with "generate is not a function".
+ * `TURBOPACK` (set by the Next 16 host) similarly breaks the child's
+ * `next build`. PORT/HOSTNAME would misdirect the child's dev/start server.
+ */
+const BLOCKED_ENV_VARS = new Set([
+  "TURBOPACK",
+  "NODE_PATH",
+  "PORT",
+  "HOSTNAME",
+  "NEXT_DEPLOYMENT_ID",
+  "NEXT_RUNTIME",
+  "NODE_OPTIONS",
+  "KEEP_ALIVE_TIMEOUT",
+]);
+
+function sanitizedHostEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("__NEXT_PRIVATE_") || BLOCKED_ENV_VARS.has(key)) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 function basePathEnv(): NodeJS.ProcessEnv {
   const home = os.homedir();
   const extras = [
@@ -30,7 +62,7 @@ function basePathEnv(): NodeJS.ProcessEnv {
     .join(":");
 
   return {
-    ...process.env,
+    ...sanitizedHostEnv(),
     PATH,
     FORCE_COLOR: "0",
     BROWSER: "none",

@@ -77,28 +77,59 @@ export async function chatWithGrok(opts: {
   };
 }
 
+export type ConceptGeneration = {
+  concepts: Concept[];
+  /** Which engine actually produced the concepts */
+  source: "grok" | "local";
+  /** Model used when source === "grok" */
+  model?: string;
+  /** Why Grok was not used (missing key, API error, parse failure, …) */
+  fallbackReason?: string;
+};
+
 /**
- * Generate 4–8 concrete product concepts from a rough idea.
- * Uses Grok via SpaceXAI when XAI_API_KEY is set; otherwise local synthesis.
+ * Generate 10 concrete product concepts from a rough idea.
+ * Uses Grok when XAI_API_KEY is set and the API call succeeds; otherwise
+ * falls back to local synthesis and REPORTS WHY via `fallbackReason` so the
+ * UI never silently pretends canned concepts came from Grok.
  */
 export async function generateConcepts(
   statement: string,
   templateHint?: string,
   agentsUsed: string[] = ["Grok", "Hermes", "Claude Code"],
-): Promise<Concept[]> {
+): Promise<ConceptGeneration> {
   const client = getClient();
-  if (client) {
-    try {
-      return await generateWithGrok(client, statement, templateHint, agentsUsed);
-    } catch (err) {
-      console.warn("Grok generation failed, falling back to local", err);
-    }
+  if (!client) {
+    return {
+      concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
+      source: "local",
+      fallbackReason: "XAI_API_KEY is not set",
+    };
   }
-  return generateLocalConcepts(statement, templateHint, agentsUsed);
+  const model = getGrokChatModel();
+  try {
+    const concepts = await generateWithGrok(
+      client,
+      model,
+      statement,
+      templateHint,
+      agentsUsed,
+    );
+    return { concepts, source: "grok", model };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn("Grok concept generation failed, falling back to local:", reason);
+    return {
+      concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
+      source: "local",
+      fallbackReason: reason,
+    };
+  }
 }
 
 async function generateWithGrok(
   client: OpenAI,
+  model: string,
   statement: string,
   templateHint: string | undefined,
   agentsUsed: string[],
@@ -110,7 +141,7 @@ ${statement}
 """
 ${templateHint ? `Preferred product type: ${templateHint}` : ""}
 
-Return ONLY valid JSON (no markdown) as an array of 6 concept objects with this shape:
+Return ONLY valid JSON (no markdown) as an array of 10 concept objects with this shape:
 {
   "title": string,
   "summary": string (2-3 sentences),
@@ -121,11 +152,19 @@ Return ONLY valid JSON (no markdown) as an array of 6 concept objects with this 
   "score": number 0-100
 }
 
-Make concepts meaningfully different angles (MVP vs ambitious, niche vs broad, local-first vs SaaS, etc.).
+HARD REQUIREMENTS:
+- Every concept must be a direct product take on the user's idea above — same
+  problem domain and goal, explored from a different angle (scope, audience,
+  platform, pricing, local-first vs SaaS). Never propose unrelated apps.
+- Titles must name the user's subject matter, not a generic archetype.
+- Features must be specific to the idea's domain (name its nouns), not
+  boilerplate like "basic auth" or "export results".
+- Pick the stack that genuinely fits each concept; vary stacks across
+  concepts where justified rather than repeating one default stack.
 Be specific and actionable — these will feed a full build pipeline.`;
 
   const resp = await client.chat.completions.create({
-    model: "grok-4.5",
+    model,
     messages: [
       {
         role: "system",
@@ -137,9 +176,16 @@ Be specific and actionable — these will feed a full build pipeline.`;
     temperature: 0.85,
   });
 
-  const text = resp.choices[0]?.message?.content?.trim() ?? "[]";
-  const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const parsed = JSON.parse(cleaned) as Array<{
+  const text = resp.choices[0]?.message?.content?.trim() ?? "";
+  // Tolerate prose / fenced output: extract the outermost JSON array
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start === -1 || end <= start) {
+    throw new Error(
+      `Grok returned no JSON array (starts with: ${text.slice(0, 80)})`,
+    );
+  }
+  const parsed = JSON.parse(text.slice(start, end + 1)) as Array<{
     title: string;
     summary: string;
     features: string[];
@@ -149,7 +195,7 @@ Be specific and actionable — these will feed a full build pipeline.`;
     score: number;
   }>;
 
-  return parsed.slice(0, 8).map((c) => ({
+  return parsed.slice(0, 10).map((c) => ({
     id: `concept-${nanoid(8)}`,
     title: c.title,
     summary: c.summary,
@@ -162,15 +208,201 @@ Be specific and actionable — these will feed a full build pipeline.`;
   }));
 }
 
+/**
+ * Domain profiles used by local synthesis so offline concepts still center on
+ * the user's idea: matched profiles contribute idea-relevant features and
+ * stack picks instead of one-size-fits-all boilerplate.
+ */
+type DomainProfile = {
+  name: string;
+  test: RegExp;
+  features: string[];
+  stack: string[];
+};
+
+const DOMAIN_PROFILES: DomainProfile[] = [
+  {
+    name: "containers",
+    test: /\b(docker|containers?|kubernetes|k8s|pods?|images?)\b/i,
+    features: [
+      "Auto-discover running and stopped containers via the Docker socket",
+      "Inventory of images, volumes, and networks with sizes",
+      "One-click start / stop / restart / remove actions",
+      "Live CPU / memory / network usage per container",
+      "Detect orphaned images and volumes and suggest cleanup",
+      "Export container inventory as JSON / CSV",
+    ],
+    stack: ["dockerode", "Node.js"],
+  },
+  {
+    name: "system-scan",
+    test: /\b(scan|disk|files?|folders?|duplicates?|storage|cleanup|computer|machine)\b/i,
+    features: [
+      "Fast recursive filesystem scan with ignore rules",
+      "Size / type / age breakdown of what was found",
+      "Duplicate and large-file detection",
+      "Safe review-before-delete workflow",
+      "Scheduled rescans with change diffs",
+    ],
+    stack: ["Node.js", "fast-glob"],
+  },
+  {
+    name: "web-data",
+    test: /\b(scrape|scraping|crawl|monitor|prices?|rss|news|feeds?|websites?)\b/i,
+    features: [
+      "Configurable source list with per-site selectors",
+      "Change detection with diff highlighting",
+      "Alert rules (email / webhook) on matches",
+      "Historical snapshots and trend view",
+      "Rate-limited polite fetching with retries",
+    ],
+    stack: ["Playwright", "Cheerio", "Node.js"],
+  },
+  {
+    name: "finance",
+    test: /\b(budget|expenses?|finance|invoices?|money|stocks?|crypto|portfolio|accounting)\b/i,
+    features: [
+      "Transaction import (CSV / OFX) with dedupe",
+      "Category rules and auto-tagging",
+      "Monthly budget vs actual views",
+      "Recurring charge detection",
+      "Net-worth / balance trend charts",
+    ],
+    stack: ["PostgreSQL", "Recharts"],
+  },
+  {
+    name: "media",
+    test: /\b(photos?|images?|videos?|music|audio|podcasts?|gallery)\b/i,
+    features: [
+      "Bulk import with metadata extraction",
+      "Auto-organization by date / content / tags",
+      "Fast thumbnail grid with lazy loading",
+      "Duplicate and near-duplicate detection",
+      "Batch edit / convert / export pipeline",
+    ],
+    stack: ["sharp", "SQLite"],
+  },
+  {
+    name: "productivity",
+    test: /\b(todos?|tasks?|notes?|habits?|journal|calendar|schedule|reminders?)\b/i,
+    features: [
+      "Quick capture with keyboard-first entry",
+      "Views by project, due date, and priority",
+      "Recurring items and smart reminders",
+      "Full-text search across everything",
+      "Daily / weekly review summaries",
+    ],
+    stack: ["SQLite", "Tiptap"],
+  },
+  {
+    name: "chat-ai",
+    test: /\b(chat(bot)?|assistant|\bai\b|llm|gpt|grok|agents?)\b/i,
+    features: [
+      "Streaming chat with conversation history",
+      "Model picker (local + cloud) with fallback",
+      "Tool / function calling for real actions",
+      "Prompt templates and saved workflows",
+      "Per-conversation cost and token tracking",
+    ],
+    stack: ["Vercel AI SDK", "LM Studio"],
+  },
+  {
+    name: "commerce",
+    test: /\b(shop|store|e-?commerce|marketplace|cart|orders?|inventory|products?)\b/i,
+    features: [
+      "Product catalog with variants and stock levels",
+      "Cart and checkout flow with payment provider",
+      "Order management and status tracking",
+      "Low-stock alerts and reorder suggestions",
+      "Sales dashboard with top-seller breakdown",
+    ],
+    stack: ["Stripe", "PostgreSQL"],
+  },
+  {
+    name: "community",
+    test: /\b(social|community|forum|share|feed|comments?|profiles?|members?)\b/i,
+    features: [
+      "User profiles with activity feeds",
+      "Posts, replies, and reactions",
+      "Moderation queue and report handling",
+      "Notifications and mentions",
+      "Search and trending topics",
+    ],
+    stack: ["PostgreSQL", "WebSockets"],
+  },
+  {
+    name: "health",
+    test: /\b(health|fitness|workouts?|meals?|nutrition|sleep|weight)\b/i,
+    features: [
+      "Daily logging with minimal-tap entry",
+      "Progress charts and streak tracking",
+      "Goal setting with adaptive targets",
+      "Weekly summary and insight digest",
+      "Data export for records",
+    ],
+    stack: ["SQLite", "Recharts"],
+  },
+];
+
+/** Strip "build me a website that…"-style filler to get the idea's core subject. */
+function extractSubject(statement: string): string {
+  const s = statement.trim().replace(/\s+/g, " ");
+  const stripped = s
+    .replace(
+      /^(please\s+)?(can you\s+)?(i\s+(want|need|would like)\s+(you\s+to\s+)?)?(build|create|make|develop|design|write|code|generate)\s+(me\s+)?(a|an|the)?\s*/i,
+      "",
+    )
+    .replace(
+      /^(website|web\s?app|app|application|tool|cli|service|platform|extension|dashboard|program)\s*(called\s+\S+\s*)?((that|which|to|for)\s+)?/i,
+      "",
+    )
+    .trim();
+  return stripped.length >= 8 ? stripped : s;
+}
+
+function matchDomains(statement: string): DomainProfile[] {
+  // Rank matched profiles by how many distinct keywords hit, so the idea's
+  // dominant domain contributes features first.
+  return DOMAIN_PROFILES.map((d) => {
+    const hits =
+      statement.match(new RegExp(d.test.source, "gi"))?.length ?? 0;
+    return { d, hits };
+  })
+    .filter((x) => x.hits > 0)
+    .sort((a, b) => b.hits - a.hits)
+    .map((x) => x.d);
+}
+
 function generateLocalConcepts(
   statement: string,
   templateHint: string | undefined,
   agentsUsed: string[],
 ): Concept[] {
   const seed = statement.trim() || "Untitled product";
+  const subject = extractSubject(seed);
   const short =
-    seed.length > 48 ? seed.slice(0, 45).trim() + "…" : seed;
+    subject.length > 48 ? subject.slice(0, 45).trim() + "…" : subject;
   const kind = (templateHint || detectKind(seed)).toLowerCase();
+  const domains = matchDomains(seed);
+  const domainFeatures = domains.flatMap((d) => d.features);
+  const domainStack = domains.flatMap((d) => d.stack);
+
+  /** Pick n idea-specific features, rotating start point so angles differ. */
+  const pickDomain = (offset: number, n: number): string[] => {
+    if (domainFeatures.length === 0) return [];
+    const out: string[] = [];
+    for (let i = 0; i < Math.min(n, domainFeatures.length); i++) {
+      out.push(domainFeatures[(offset + i) % domainFeatures.length]);
+    }
+    return out;
+  };
+
+  const mergeStack = (base: string[]): string[] => {
+    const seen = new Set<string>();
+    return [...base, ...domainStack]
+      .filter((t) => (seen.has(t) ? false : (seen.add(t), true)))
+      .slice(0, 6);
+  };
 
   const angles: Array<{
     title: string;
@@ -182,103 +414,142 @@ function generateLocalConcepts(
     score: number;
   }> = [
     {
-      title: `${short} · Focused MVP`,
-      lens: "Ship the smallest lovable version that validates the core loop.",
+      title: `${short} — Focused MVP`,
+      lens: `The smallest lovable version: ${subject}, end-to-end, nothing else.`,
       features: [
-        "Single primary workflow end-to-end",
-        "Local data persistence",
-        "Minimal auth / guest mode",
-        "Export / share of results",
-        "Basic observability",
+        ...pickDomain(0, 3),
+        `Single streamlined workflow for ${short}`,
+        "Local data persistence — works before any account exists",
       ],
-      stack: stackFor(kind, "mvp"),
+      stack: mergeStack(stackFor(kind, "mvp")),
       difficulty: "easy",
       effort: "1–2 weeks",
       score: 88,
     },
     {
-      title: `${short} · Multi-agent control plane`,
-      lens: "Treat the problem as an orchestration surface where specialized agents collaborate with human gates.",
+      title: `${short} — Full product`,
+      lens: `The ambitious take: ${subject} with the complete supporting toolset.`,
       features: [
-        "Agent registry with live status",
-        "Idea → concept → pipeline routing",
-        "Shared project memory & handoffs",
-        "Approval gates on plans",
-        "Activity feed & usage metrics",
-        "Local + cloud hybrid execution",
+        ...pickDomain(1, 4),
+        "Saved views, history, and undo",
+        "Multi-device sync",
       ],
-      stack: ["Next.js", "TypeScript", "SQLite", "xAI Grok", "Tailwind"],
+      stack: mergeStack(["Next.js", "TypeScript", "PostgreSQL", "Tailwind"]),
       difficulty: "hard",
       effort: "4–6 weeks",
-      score: 94,
+      score: 92,
     },
     {
-      title: `${short} · CLI-first power tool`,
-      lens: "Optimize for developers who live in the terminal; thin TUI + optional web UI later.",
+      title: `${short} — CLI power tool`,
+      lens: `${subject} for people who live in the terminal; scriptable and composable.`,
       features: [
-        "Composable subcommands",
-        "Config via file + env",
-        "Streaming progress output",
-        "Plugin hooks for agents",
-        "JSON / human dual output",
+        ...pickDomain(2, 3),
+        "Composable subcommands with JSON / human dual output",
+        "Config via file + env for CI use",
       ],
-      stack: stackFor("cli", "cli"),
+      stack: mergeStack(stackFor("cli", "cli")),
       difficulty: "medium",
       effort: "2–3 weeks",
       score: 82,
     },
     {
-      title: `${short} · Real-time ops dashboard`,
-      lens: "Make state visible: live boards, metrics, and intervention controls for operators.",
+      title: `${short} — Live dashboard`,
+      lens: `Make the state behind "${short}" visible at a glance and act on it.`,
       features: [
-        "Live Kanban of workstreams",
-        "Dependency graph of tasks",
-        "Searchable agent list",
-        "Cost / token tracking",
-        "Pause / reassign / approve controls",
+        ...pickDomain(3, 3),
+        "Auto-refreshing overview with drill-down detail",
+        "Bulk actions from the board",
       ],
-      stack: stackFor("dashboard", "web"),
+      stack: mergeStack(stackFor("dashboard", "web")),
       difficulty: "medium",
       effort: "2–4 weeks",
       score: 86,
     },
     {
-      title: `${short} · API + SDK platform`,
-      lens: "Expose the capability as a clean API that other tools and agents can call.",
+      title: `${short} — API-first service`,
+      lens: `Expose ${short} as a clean API other tools and scripts can call.`,
       features: [
-        "Versioned REST / RPC API",
-        "OpenAPI schema",
-        "API keys & rate limits",
-        "Webhook events",
-        "Typed client SDK",
+        ...pickDomain(4, 3),
+        "Versioned REST API with OpenAPI schema",
+        "Webhook events on changes",
       ],
-      stack: stackFor("api", "api"),
+      stack: mergeStack(stackFor("api", "api")),
       difficulty: "medium",
       effort: "3–4 weeks",
       score: 79,
     },
     {
-      title: `${short} · Local-only privacy edition`,
-      lens: "Everything on-device via LM Studio / local agents; no cloud dependency for the happy path.",
+      title: `${short} — Local-first privacy edition`,
+      lens: `${subject}, entirely on-device: no cloud required for the happy path.`,
       features: [
-        "Offline-first store",
-        "LM Studio model picker",
-        "Encrypted local workspace",
-        "Optional cloud agents as plugins",
-        "Full history export",
+        ...pickDomain(5, 3),
+        "Offline-first encrypted local store",
+        "Full data export at any time",
       ],
-      stack: ["Next.js", "SQLite", "LM Studio", "Hermes", "TypeScript"],
+      stack: mergeStack(["Tauri", "SQLite", "TypeScript"]),
       difficulty: "hard",
       effort: "3–5 weeks",
-      score: 90,
+      score: 89,
+    },
+    {
+      title: `${short} — Mobile companion`,
+      lens: `${subject} from your pocket: capture, review, and act anywhere.`,
+      features: [
+        ...pickDomain(6, 3),
+        "Quick-capture with offline queue",
+        "Push notifications for things needing attention",
+      ],
+      stack: mergeStack(stackFor("mobile", "mobile")),
+      difficulty: "medium",
+      effort: "3–4 weeks",
+      score: 78,
+    },
+    {
+      title: `${short} — Automation worker`,
+      lens: `No UI to babysit: ${subject} on schedules and triggers, reporting results.`,
+      features: [
+        ...pickDomain(7, 3),
+        "Cron-style scheduled runs with retry + dead-letter log",
+        "Notification digests (email / Slack)",
+      ],
+      stack: mergeStack(["Node.js", "TypeScript", "SQLite", "BullMQ"]),
+      difficulty: "medium",
+      effort: "2–3 weeks",
+      score: 81,
+    },
+    {
+      title: `${short} — Insights & analytics`,
+      lens: `Lead with the data behind "${short}": trends, breakdowns, alerts.`,
+      features: [
+        ...pickDomain(8, 3),
+        "Time-series charts of the key metrics",
+        "Anomaly alerts and scheduled reports",
+      ],
+      stack: mergeStack(["Next.js", "Recharts", "DuckDB", "Tailwind"]),
+      difficulty: "medium",
+      effort: "3–4 weeks",
+      score: 80,
+    },
+    {
+      title: `${short} — Team edition`,
+      lens: `${subject} shared with a small team: roles, review, and an audit trail.`,
+      features: [
+        ...pickDomain(9, 3),
+        "Workspaces with member roles",
+        "Change history and review / approval flow",
+      ],
+      stack: mergeStack(["Next.js", "PostgreSQL", "Auth.js", "Tailwind"]),
+      difficulty: "hard",
+      effort: "4–6 weeks",
+      score: 77,
     },
   ];
 
   return angles.map((a) => ({
     id: `concept-${nanoid(8)}`,
     title: a.title,
-    summary: `${a.lens} Built around: ${seed}`,
-    features: a.features,
+    summary: `${a.lens} Built around your idea: ${seed}`,
+    features: a.features.slice(0, 6),
     stack: a.stack,
     difficulty: a.difficulty,
     estimatedEffort: a.effort,

@@ -151,6 +151,17 @@ for (const rel of ["desktop-runtime", "dist-desktop", "dist"]) {
   }
 }
 
+// App scaffold templates are read at runtime by src/lib/build/scaffold.ts,
+// but src/ is stripped from standalone above — stage them at the runtime
+// root where scaffold.ts looks (cwd/templates, since server.js chdirs here).
+const templatesSrc = path.join(root, "src", "lib", "build", "templates");
+if (fs.existsSync(templatesSrc)) {
+  console.log("Copying scaffold templates → desktop-runtime/templates");
+  copyDir(templatesSrc, path.join(runtime, "templates"));
+} else {
+  console.warn("WARNING scaffold templates not found at", templatesSrc);
+}
+
 // Double-check critical modules
 const checks = [
   "server.js",
@@ -158,6 +169,7 @@ const checks = [
   "node_modules/react/package.json",
   path.join(".next", "static"),
   "public/branding/cortex.jpg",
+  "templates/docker/app/page.tsx",
 ];
 for (const rel of checks) {
   const p = path.join(runtime, rel);

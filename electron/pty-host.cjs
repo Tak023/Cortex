@@ -217,6 +217,26 @@ function buildEnv() {
     COLORTERM: "truecolor",
   };
   delete env.ELECTRON_RUN_AS_NODE;
+  // The Cortex server process sets Next standalone internals (and
+  // PORT/HOSTNAME/NODE_ENV=production). If terminal sessions inherit them,
+  // any `next build` / `npm install` run from the embedded terminal breaks
+  // ("generate is not a function", skipped devDependencies, …).
+  const blocked = [
+    "TURBOPACK",
+    "NODE_PATH",
+    "PORT",
+    "HOSTNAME",
+    "NODE_ENV",
+    "NEXT_DEPLOYMENT_ID",
+    "NEXT_RUNTIME",
+    "NODE_OPTIONS",
+    "KEEP_ALIVE_TIMEOUT",
+  ];
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("__NEXT_PRIVATE_") || blocked.includes(key)) {
+      delete env[key];
+    }
+  }
   return env;
 }
 

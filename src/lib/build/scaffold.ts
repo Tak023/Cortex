@@ -63,15 +63,24 @@ function copyTree(src: string, dest: string, out: string[], prefix = "") {
 }
 
 function dockerTemplateDir(): string {
-  // Prefer compiled-adjacent templates (works in Next server & tsx)
   const candidates = [
+    // Compiled-adjacent templates (works in Next server & tsx)
     path.join(__dirname, "templates", "docker"),
+    // Dev mode: cwd is the project root
     path.join(process.cwd(), "src", "lib", "build", "templates", "docker"),
+    // Packaged desktop: prepare-standalone.cjs stages templates/ at the
+    // standalone root, and server.js chdirs there before starting
+    path.join(process.cwd(), "templates", "docker"),
   ];
+  // page.tsx must exist or the scaffolded app can't build — an empty or
+  // partial template dir is as fatal as a missing one
   for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
+    if (fs.existsSync(path.join(c, "app", "page.tsx"))) return c;
   }
-  return candidates[1];
+  throw new Error(
+    `Docker app template not found (looked in: ${candidates.join(", ")}). ` +
+      `The packaged app must ship src/lib/build/templates via desktop-runtime/templates.`,
+  );
 }
 
 function detectKind(concept: Concept, ideaHint = ""): "docker" | "cli" | "api" | "web" {
@@ -148,7 +157,7 @@ phases live in \`../artifacts/\`.
   let buildLog = "skipped";
 
   if (options.runInstall !== false && fs.existsSync(path.join(appDir, "package.json"))) {
-    // Up to 2 install attempts — incomplete installs cause "generate is not a function"
+    // Up to 2 install attempts — a partial node_modules breaks the build smoke
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const { stdout, stderr } = await execFileAsync(

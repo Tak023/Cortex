@@ -69,11 +69,12 @@ export async function POST(req: Request) {
   const started = Date.now();
 
   try {
-    const concepts = await generateConcepts(
+    const generation = await generateConcepts(
       statement,
       template?.name,
       teamNames,
     );
+    const { concepts, source, model, fallbackReason } = generation;
 
     const latency = Date.now() - started;
     idea = {
@@ -98,22 +99,35 @@ export async function POST(req: Request) {
         id: `use-${nanoid(8)}`,
         agentId: a.id,
         tokens: Math.floor(800 + Math.random() * 1500),
-        costUsd: isAiConfigured() ? 0.01 : 0,
+        costUsd: source === "grok" ? 0.01 : 0,
         latencyMs: Math.floor(latency / team.length),
         createdAt: new Date().toISOString(),
       });
     }
 
+    // Never let a Grok failure masquerade as AI output — tell the user why
+    // they're seeing locally synthesized concepts.
+    if (source === "local" && isAiConfigured()) {
+      pushActivity({
+        type: "error",
+        message: `Grok concept generation failed — used local synthesis instead. Reason: ${(fallbackReason || "unknown").slice(0, 180)}`,
+      });
+    }
+
     pushActivity({
       type: "concept_generated",
-      message: `Generated ${concepts.length} concepts for "${statement.slice(0, 60)}${statement.length > 60 ? "…" : ""}"`,
+      message: `Generated ${concepts.length} concepts (${source === "grok" ? `Grok · ${model}` : "local synthesis"}) for "${statement.slice(0, 60)}${statement.length > 60 ? "…" : ""}"`,
     });
 
     return NextResponse.json({
       idea,
       concepts,
       team: teamNames,
-      mode: isAiConfigured() ? "grok" : "local-synthesis",
+      mode:
+        source === "grok"
+          ? `grok (${model})`
+          : `local-synthesis${isAiConfigured() ? " — Grok call failed" : " — no API key"}`,
+      fallbackReason: fallbackReason ?? null,
     });
   } catch (err) {
     for (const a of team) {
