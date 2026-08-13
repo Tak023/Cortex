@@ -124,6 +124,8 @@ type AnthropicMonth = {
   orgId?: string;
   /** True when Admin API answered but org has no billed usage this month */
   emptyOrgUsage?: boolean;
+  /** Derived from the configured baseline minus spend since it; null if unset */
+  creditsAvailable?: number | null;
 };
 
 /** Sum token fields from a Usage API result row (matches Console dashboard volume). */
@@ -197,7 +199,12 @@ async function fetchAnthropicReportPages(
  *
  * - Spend this month → cost_report (USD, amounts in cents)
  * - Token volume → usage_report/messages (includes cache read + cache creation)
- * - Organization credits → not in public Admin API; set CLAUDE_CREDITS_AVAILABLE
+ * - Organization credits → NOT available. The Admin API exposes only
+ *   usage_report/messages and cost_report, both date-range reports; there is no
+ *   balance endpoint (verified against the Usage & Cost API docs). Unlike xAI
+ *   and Nous, a live Claude balance cannot be fetched, so it is derived from a
+ *   configured baseline minus real spend since that date — see
+ *   anthropicCreditsRemaining().
  *
  * https://platform.claude.com/docs/en/manage-claude/usage-cost-api
  */
@@ -297,6 +304,10 @@ async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
     if (!detail) detail = e instanceof Error ? e.message : String(e);
   }
 
+  // Derive remaining credits (no balance endpoint exists — see the note above)
+  const credits = await anthropicCreditsRemaining(headers);
+  if (credits.detail && !detail) detail = credits.detail;
+
   const emptyOrgUsage = ok && tokens === 0 && costUsd === 0;
   const orgLabel = orgName ? `“${orgName}”` : "Console org";
   if (ok) {
@@ -313,7 +324,86 @@ async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
     orgName,
     orgId,
     emptyOrgUsage,
+    creditsAvailable: credits.usd,
   };
+}
+
+/**
+ * Remaining Claude credits, derived rather than fetched.
+ *
+ * Anthropic publishes no balance endpoint, so a static number goes stale the
+ * moment you spend anything — the card read $87.02 against a real $46.92
+ * because it was a hand-typed constant nobody updated. Instead: anchor a
+ * balance you read off the dashboard at a point in time, then subtract the
+ * spend the Cost API reports since that instant.
+ *
+ *   CLAUDE_CREDITS_BASELINE_USD  balance in USD when you last checked
+ *   CLAUDE_CREDITS_BASELINE_AT   ISO-8601 timestamp of that reading
+ *
+ * Accurate until the next top-up, at which point re-anchor both values.
+ * Returns null when unconfigured so the caller can fall back to the static
+ * CLAUDE_CREDITS_AVAILABLE, and `stale: true` when the baseline is unusable so
+ * the UI can say so rather than showing a confidently wrong figure.
+ */
+async function anthropicCreditsRemaining(
+  headers: Record<string, string>,
+): Promise<{ usd: number | null; detail?: string }> {
+  const rawBaseline = process.env.CLAUDE_CREDITS_BASELINE_USD?.trim();
+  const rawAt = process.env.CLAUDE_CREDITS_BASELINE_AT?.trim();
+  if (!rawBaseline || !rawAt) return { usd: null };
+
+  const baseline = Number(rawBaseline);
+  const at = Date.parse(rawAt);
+  if (!Number.isFinite(baseline) || !Number.isFinite(at)) {
+    return {
+      usd: null,
+      detail: "CLAUDE_CREDITS_BASELINE_USD / _AT are not a number and a date",
+    };
+  }
+
+  // cost_report only reports COMPLETE UTC days: it truncates both bounds to day
+  // boundaries and then requires end > start, so a range beginning today is a
+  // 400 ("ending date must be after starting date"), not an empty result. Align
+  // the start to its UTC day and, when the baseline is today, report zero spend
+  // rather than failing — there are no billed days to subtract yet.
+  const dayStart = (ms: number) => {
+    const d = new Date(ms);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  };
+  const baselineDay = dayStart(at);
+  const todayDay = dayStart(Date.now());
+  if (baselineDay >= todayDay) {
+    return { usd: Math.max(0, baseline) };
+  }
+
+  try {
+    const buckets = await fetchAnthropicReportPages(
+      "/v1/organizations/cost_report",
+      {
+        starting_at: new Date(baselineDay).toISOString(),
+        ending_at: endOfNextDayUtc().toISOString(),
+        bucket_width: "1d",
+        limit: "31",
+      },
+      headers,
+    );
+    let spentCents = 0;
+    for (const bucket of buckets) {
+      for (const raw of bucket.results || []) {
+        if (!raw || typeof raw !== "object") continue;
+        const r = raw as { amount?: string | number };
+        const cents = Number(r.amount ?? 0);
+        if (Number.isFinite(cents)) spentCents += cents;
+      }
+    }
+    return { usd: Math.max(0, baseline - spentCents / 100) };
+  } catch (e) {
+    // Don't invent a number from a failed fetch — that is how $87.02 happened.
+    return {
+      usd: null,
+      detail: `credit derivation failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
 }
 
 function creditsFromEnv(provider: ProviderId): number | null {
@@ -1094,7 +1184,9 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
       ? anthropic.costUsd
       : claudeLocal.costUsd;
 
-  const claudeCredits = creditsFromEnv("claude");
+  // Derived balance (baseline − spend since) wins; the static env value is a
+  // legacy fallback and is stale by construction.
+  const claudeCredits = anthropic.creditsAvailable ?? creditsFromEnv("claude");
 
   const grokCredits =
     xai.ok && xai.creditsAvailable != null
