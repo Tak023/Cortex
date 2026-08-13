@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ActivityFeed } from "@/components/orchestration/ActivityFeed";
+import { ProviderUsageCards } from "@/components/command/ProviderUsageCards";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -44,6 +45,9 @@ export default function CommandCenterPage() {
       />
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Claude · Grok · Hermes credits */}
+        <ProviderUsageCards />
+
         {/* Metrics strip */}
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[
@@ -105,28 +109,37 @@ export default function CommandCenterPage() {
                 </Link>
               </CardHeader>
               <CardBody className="space-y-2 !pt-2">
-                {agents.map((agent) => (
-                  <div
-                    key={agent.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-panel-elevated/40 px-3 py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">{agent.name}</span>
-                        <Badge className={statusColor(agent.status)}>
-                          {agent.status}
-                        </Badge>
-                      </div>
-                      <div className="truncate text-xs text-muted">
-                        {agent.currentTaskLabel ||
-                          agent.roles.slice(0, 3).join(" · ")}
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right text-[11px] tabular-nums text-muted">
-                      {formatTokens(agent.metrics.tokensUsed)} tok
-                    </div>
+                {agents.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-muted">
+                    Loading agents… If this stays empty after relaunch, quit
+                    Cortex fully and reopen, or run a fresh desktop build.
                   </div>
-                ))}
+                ) : (
+                  agents.map((agent) => (
+                    <div
+                      key={agent.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-panel-elevated/40 px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">
+                            {agent.name}
+                          </span>
+                          <Badge className={statusColor(agent.status)}>
+                            {agent.status}
+                          </Badge>
+                        </div>
+                        <div className="truncate text-xs text-muted">
+                          {agent.currentTaskLabel ||
+                            agent.roles.slice(0, 3).join(" · ")}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right text-[11px] tabular-nums text-muted">
+                        {formatTokens(agent.metrics.tokensUsed)} tok
+                      </div>
+                    </div>
+                  ))
+                )}
               </CardBody>
             </Card>
 

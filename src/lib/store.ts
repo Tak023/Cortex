@@ -21,6 +21,10 @@ ensureSecretsLoaded();
  * Local-first persistence.
  * - Web/dev: ./data under the project
  * - Desktop (Electron): CORTEX_DATA_DIR → OS userData/data
+ *
+ * Resolve on every call — do not cache at module load. Electron sets
+ * CORTEX_DATA_DIR just before requiring the Next server; a stale import-time
+ * path would point at standalone/data and look like an empty Command Center.
  */
 function resolveDataDir(): string {
   if (process.env.CORTEX_DATA_DIR) {
@@ -29,8 +33,9 @@ function resolveDataDir(): string {
   return path.join(process.cwd(), "data");
 }
 
-const DATA_DIR = resolveDataDir();
-const STATE_FILE = path.join(DATA_DIR, "state.json");
+function stateFilePath(): string {
+  return path.join(resolveDataDir(), "state.json");
+}
 
 /** Absolute path to Cortex's local data directory (state + workspaces). */
 export function getDataDir(): string {
@@ -116,17 +121,19 @@ let memory: AppState | null = null;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  const dir = resolveDataDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 }
 
 function load(): AppState {
   if (memory) return memory;
   ensureDir();
+  const stateFile = stateFilePath();
   try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = fs.readFileSync(STATE_FILE, "utf-8");
+    if (fs.existsSync(stateFile)) {
+      const raw = fs.readFileSync(stateFile, "utf-8");
       const parsed = JSON.parse(raw) as AppState;
       // Merge default agents if new ones appear (e.g. OpenJarvis after upgrade)
       const byId = new Map(parsed.agents.map((a) => [a.id, a]));
@@ -166,11 +173,12 @@ function persist() {
   if (!memory) return;
   ensureDir();
   const snapshot = JSON.stringify(memory, null, 2);
+  const stateFile = stateFilePath();
   // Debounce disk writes
   if (writeTimer) clearTimeout(writeTimer);
   writeTimer = setTimeout(() => {
     try {
-      fs.writeFileSync(STATE_FILE, snapshot, "utf-8");
+      fs.writeFileSync(stateFile, snapshot, "utf-8");
     } catch (e) {
       console.error("Failed to persist state", e);
     }

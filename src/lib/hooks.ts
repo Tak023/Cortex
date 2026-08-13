@@ -28,7 +28,11 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /** Poll only when the tab is visible; skip overlapping in-flight requests. */
-function useInterval(callback: () => void | Promise<void>, ms: number | null) {
+function useInterval(
+  callback: () => void | Promise<void>,
+  ms: number | null,
+  opts?: { immediate?: boolean },
+) {
   const saved = useRef(callback);
   const inFlight = useRef(false);
 
@@ -46,15 +50,19 @@ function useInterval(callback: () => void | Promise<void>, ms: number | null) {
       try {
         await saved.current();
       } catch {
-        // ignore poll errors
+        // ignore poll errors — next tick retries (cold start / server warm-up)
       } finally {
         inFlight.current = false;
       }
     };
 
+    // Immediate tick helps after relaunch when the first paint races the server
+    if (opts?.immediate !== false) {
+      void tick();
+    }
     const id = setInterval(tick, ms);
     return () => clearInterval(id);
-  }, [ms]);
+  }, [ms, opts?.immediate]);
 }
 
 export function useAgents(pollMs = 5000) {
@@ -62,9 +70,12 @@ export function useAgents(pollMs = 5000) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const data = await json<{ agents: Agent[] }>("/api/agents");
-    setAgents(data.agents);
-    setLoading(false);
+    try {
+      const data = await json<{ agents: Agent[] }>("/api/agents");
+      setAgents(data.agents);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -125,10 +136,14 @@ export function useMetrics(pollMs = 8000) {
   } | null>(null);
 
   const load = useCallback(async () => {
-    const d = await json<{ metrics: NonNullable<typeof metrics> }>(
-      "/api/metrics",
-    );
-    setMetrics(d.metrics);
+    try {
+      const d = await json<{ metrics: NonNullable<typeof metrics> }>(
+        "/api/metrics",
+      );
+      setMetrics(d.metrics);
+    } catch {
+      /* retry on next poll */
+    }
   }, []);
 
   useEffect(() => {
@@ -185,9 +200,12 @@ export function useProjects(pollMs = 4000) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const data = await json<{ projects: Project[] }>("/api/projects");
-    setProjects(data.projects);
-    setLoading(false);
+    try {
+      const data = await json<{ projects: Project[] }>("/api/projects");
+      setProjects(data.projects);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
