@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bot,
@@ -46,11 +46,25 @@ export default function IdeasPage() {
     mode: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Tick a visible clock while Grok works. setState lives in the interval
+  // callback, not the effect body, so this stays off the cascading-render path.
+  useEffect(() => {
+    if (!generating) return;
+    const started = Date.now();
+    const id = setInterval(
+      () => setElapsed(Math.round((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => clearInterval(id);
+  }, [generating]);
 
   const onGenerate = async () => {
     if (!statement.trim()) return;
     setGenerating(true);
     setError(null);
+    setElapsed(0);
     try {
       const data = await generate(statement.trim(), templateId);
       setResult(data);
@@ -144,7 +158,16 @@ export default function IdeasPage() {
                   </>
                 )}
               </Button>
-              {result && (
+              {/* A silent 45s spinner is indistinguishable from a hang — show
+                  the clock and say what it is waiting on. */}
+              {generating && (
+                <span className="text-xs text-muted" aria-live="polite">
+                  Grok is drafting 10 concepts — typically 40–60s.{" "}
+                  <span className="tabular-nums text-sky-300">{elapsed}s</span>
+                  {elapsed >= 75 && " · almost at the limit, will fall back to local synthesis"}
+                </span>
+              )}
+              {!generating && result && (
                 <span className="text-xs text-muted">
                   Team: {result.team.join(", ")} · mode: {result.mode}
                 </span>

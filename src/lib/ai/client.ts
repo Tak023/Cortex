@@ -2,12 +2,25 @@ import OpenAI from "openai";
 import type { Concept } from "../types";
 import { nanoid } from "nanoid";
 
+/**
+ * Hard ceiling on any single xAI request.
+ *
+ * The SDK defaults to a 10-minute timeout with 2 retries, so one stalled call
+ * could occupy a request for ~30 minutes with no way for the UI to recover —
+ * which is what made "Generate concepts" look permanently frozen. Concept
+ * generation legitimately takes ~45s, so the bound has to clear that with room
+ * to spare while still failing in a human timeframe.
+ */
+const XAI_TIMEOUT_MS = 90_000;
+
 function getClient(): OpenAI | null {
   const key = process.env.XAI_API_KEY?.trim();
   if (!key) return null;
   return new OpenAI({
     apiKey: key,
     baseURL: "https://api.x.ai/v1",
+    timeout: XAI_TIMEOUT_MS,
+    maxRetries: 1,
   });
 }
 
@@ -163,18 +176,27 @@ HARD REQUIREMENTS:
   concepts where justified rather than repeating one default stack.
 Be specific and actionable — these will feed a full build pipeline.`;
 
-  const resp = await client.chat.completions.create({
-    model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You return only compact JSON arrays. No prose, no code fences.",
-      },
-      { role: "user", content: prompt },
-    ],
-    temperature: 0.85,
-  });
+  const resp = await client.chat.completions.create(
+    {
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You return only compact JSON arrays. No prose, no code fences.",
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.85,
+      // Ten fully-specified concepts run ~4k tokens. Cap generously: too low
+      // truncates the JSON array and throws away an otherwise good response.
+      max_tokens: 8000,
+    },
+    // No retry here — this call already takes ~45s, and a second attempt would
+    // double the wait for no gain. Failure falls through to local synthesis,
+    // which reports why via fallbackReason.
+    { maxRetries: 0 },
+  );
 
   const text = resp.choices[0]?.message?.content?.trim() ?? "";
   // Tolerate prose / fenced output: extract the outermost JSON array

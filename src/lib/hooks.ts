@@ -10,13 +10,31 @@ import type {
   Project,
 } from "./types";
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> {
+/**
+ * `timeoutMs` guarantees the UI can always recover. Without it a wedged route
+ * leaves a spinner running forever, which is indistinguishable from a crash.
+ * Long AI calls pass an explicit budget; everything else uses the default.
+ */
+async function json<T>(
+  url: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const { timeoutMs = 30_000, ...rest } = init ?? {};
   const res = await fetch(url, {
-    ...init,
+    ...rest,
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
     },
+    signal: rest.signal ?? AbortSignal.timeout(timeoutMs),
+  }).catch((e: unknown) => {
+    // TimeoutError from AbortSignal.timeout reads as "signal is aborted"
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error(
+        `Request to ${url} timed out after ${Math.round(timeoutMs / 1000)}s`,
+      );
+    }
+    throw e;
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -178,6 +196,9 @@ export function useIdeas() {
     }>("/api/ideas/generate", {
       method: "POST",
       body: JSON.stringify({ statement, templateId }),
+      // Grok is bounded at 90s server-side (plus one retry); sit above that so
+      // the client only gives up if the route itself wedges.
+      timeoutMs: 200_000,
     });
     await refresh();
     return data;
