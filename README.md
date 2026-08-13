@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.6 |
+| **Version** | 0.2.7 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -108,6 +108,14 @@ Highlights since the initial 0.1.x release:
 - **`graphify-out/` is no longer indexed as notes.** Its generated `GRAPH_REPORT.md` was being treated as a vault note, outranking hand-written ones in most searches and consuming slots in the top-N block injected into Jarvis prompts and pipeline research context
 - The exclusion now lives in one shared predicate used by both note walkers, which had already drifted — `graph.ts` skipped the directory while `vault.ts` did not, so `vault.noteCount` reported 12 against the graph's 11
 - Graphify is unaffected: the semantic layer reads `graphify-out/graph.json` by direct path, not through the note walker
+
+### Provider credits, bounded AI calls, faster terminals (0.2.7)
+
+- **Command Center provider cards** with live usage from the Anthropic Admin, xAI Management, and Nous Portal APIs, with resilient polling and data-dir resolution that survives a desktop relaunch
+- **Concept generation can no longer hang.** The xAI client had no timeout and no retry cap, so the SDK defaults (10-minute timeout, 2 retries) allowed a stalled call to occupy a request for ~30 minutes. Now bounded at 90s with one retry; the concepts call caps tokens and does not retry, falling back to local synthesis and reporting why
+- The Ideas page shows a **live elapsed counter** while Grok drafts concepts — the call legitimately takes 40–60s, and a silent spinner was indistinguishable from a freeze
+- `json()` accepts a request timeout, so no fetch can leave the UI spinning forever
+- **Agent terminals open faster**: xterm and its addons load in parallel rather than sequentially, and the agent rail prefetches the terminal route on hover
 
 ---
 
