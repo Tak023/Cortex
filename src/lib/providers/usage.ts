@@ -3,15 +3,14 @@
  *
  * Sources:
  * - Cortex local usage (always) — tokens & estimated $ from agents + usage log
- * - Anthropic Admin API (optional ANTHROPIC_ADMIN_KEY) — org spend & tokens this month
+ * - Claude Console session APIs (platform.claude.com) — live organization
+ *   credits + spend this month (same data as the dashboard cards)
+ * - Anthropic Admin API (ANTHROPIC_ADMIN_KEY) — token volume / cost reports
  * - xAI Management API (XAI_MANAGEMENT_KEY) — team prepaid balance & cycle spend
- * - Nous Portal (Hermes OAuth in ~/.hermes/auth.json, or NOUS_PORTAL_TOKEN) —
- *   org billing for portal.nousresearch.com/orgs/{slug}/billing
- *
- * Note: Scraping HTML consoles requires a browser login session and is not
- * reliable for a server app. Prefer the official APIs above.
+ * - Nous Portal (Hermes OAuth in ~/.hermes/auth.json, or NOUS_PORTAL_TOKEN)
  */
 
+import { execFileSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -36,6 +35,7 @@ export type ProviderUsageCard = {
   source:
     | "local"
     | "anthropic-admin"
+    | "claude-console"
     | "xai-management"
     | "nous-portal"
     | "mixed"
@@ -124,9 +124,212 @@ type AnthropicMonth = {
   orgId?: string;
   /** True when Admin API answered but org has no billed usage this month */
   emptyOrgUsage?: boolean;
-  /** Derived from the configured baseline minus spend since it; null if unset */
+  /** Live organization credits (Console prepaid/credits) */
   creditsAvailable?: number | null;
+  /** Prefer Console session over Admin-only for spend/credits */
+  consoleLive?: boolean;
 };
+
+type ClaudeConsoleAuth = {
+  sessionKey: string;
+  cookieHeader: string;
+  orgId: string;
+};
+
+/**
+ * Auth for platform.claude.com dashboard APIs (same cards as the Console UI).
+ *
+ * Priority:
+ * 1. CLAUDE_SESSION_KEY / ANTHROPIC_SESSION_KEY env (sk-ant-sid…)
+ * 2. Firefox cookies (sessionKey / sessionKeyV3 for platform.claude.com)
+ *
+ * These are not the Admin API key — they are the browser session used while
+ * logged into platform.claude.com.
+ */
+function loadClaudeConsoleAuth(): ClaudeConsoleAuth | null {
+  ensureSecretsLoaded();
+  const orgId =
+    process.env.ANTHROPIC_ORG_ID?.trim() ||
+    process.env.CLAUDE_ORG_ID?.trim() ||
+    "48ab309f-6f9f-45c7-a873-928539d1bc70";
+
+  const envSession =
+    process.env.CLAUDE_SESSION_KEY?.trim() ||
+    process.env.ANTHROPIC_SESSION_KEY?.trim() ||
+    process.env.CLAUDE_CONSOLE_SESSION?.trim();
+
+  if (envSession?.startsWith("sk-ant-sid")) {
+    return {
+      sessionKey: envSession,
+      cookieHeader: `sessionKey=${envSession}; sessionKeyV3=${envSession}`,
+      orgId,
+    };
+  }
+
+  // Firefox stores cookies unencrypted — usable for local desktop Cortex
+  try {
+    const profilesRoot = path.join(
+      os.homedir(),
+      "Library/Application Support/Firefox/Profiles",
+    );
+    if (!fs.existsSync(profilesRoot)) return null;
+    const profiles = fs
+      .readdirSync(profilesRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(profilesRoot, d.name));
+
+    for (const prof of profiles) {
+      const dbPath = path.join(prof, "cookies.sqlite");
+      if (!fs.existsSync(dbPath)) continue;
+      const tmp = path.join(
+        os.tmpdir(),
+        `cortex-ff-cookies-${process.pid}-${Date.now()}.sqlite`,
+      );
+      try {
+        fs.copyFileSync(dbPath, tmp);
+        // Use system python — avoids Firefox lock + works without node:sqlite
+        const script = `
+import sqlite3, json
+conn = sqlite3.connect(${JSON.stringify(tmp)})
+cur = conn.cursor()
+cur.execute("""
+  SELECT host, name, value FROM moz_cookies
+  WHERE host LIKE '%claude%' OR host LIKE '%anthropic%'
+""")
+rows = [{"host": h, "name": n, "value": v} for h,n,v in cur.fetchall()]
+conn.close()
+print(json.dumps(rows))
+`;
+        const out = execFileSync("python3", ["-c", script], {
+          encoding: "utf8",
+          timeout: 5000,
+          maxBuffer: 2_000_000,
+        });
+        const rows = JSON.parse(out) as Array<{
+          host: string;
+          name: string;
+          value: string;
+        }>;
+        let sessionKey = "";
+        const cookieParts: string[] = [];
+        for (const r of rows) {
+          if (!r.value || r.value === '""') continue;
+          cookieParts.push(`${r.name}=${r.value}`);
+          if (
+            (r.name === "sessionKey" || r.name === "sessionKeyV3") &&
+            r.value.startsWith("sk-ant-sid")
+          ) {
+            // Prefer platform.claude.com host when present
+            if (
+              r.host.includes("platform.claude.com") ||
+              !sessionKey
+            ) {
+              sessionKey = r.value;
+            }
+          }
+        }
+        if (sessionKey) {
+          return {
+            sessionKey,
+            cookieHeader: cookieParts.join("; "),
+            orgId,
+          };
+        }
+      } finally {
+        try {
+          fs.unlinkSync(tmp);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  } catch {
+    /* no browser session */
+  }
+  return null;
+}
+
+/**
+ * Live dashboard cards from platform.claude.com (requires Console login session):
+ * - GET /api/organizations/{org}/prepaid/credits  → organization credits
+ * - GET /api/organizations/{org}/current_spend    → spend this month
+ */
+async function fetchClaudeConsoleDashboard(
+  auth: ClaudeConsoleAuth,
+): Promise<{
+  creditsUsd: number | null;
+  spentUsd: number | null;
+  ok: boolean;
+  detail?: string;
+}> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${auth.sessionKey}`,
+    Accept: "application/json",
+    Cookie: auth.cookieHeader,
+    Origin: "https://platform.claude.com",
+    Referer: "https://platform.claude.com/dashboard",
+    "User-Agent": "Cortex/0.2 (provider-usage; +local)",
+  };
+  const base = `https://platform.claude.com/api/organizations/${encodeURIComponent(auth.orgId)}`;
+
+  let creditsUsd: number | null = null;
+  let spentUsd: number | null = null;
+  let ok = false;
+  let detail: string | undefined;
+
+  try {
+    const res = await fetch(`${base}/prepaid/credits`, {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const json = (await res.json()) as {
+        amount?: number;
+        balance?: { credits?: { amount_minor?: number; exponent?: number } };
+        balance_credits?: number;
+      };
+      // amount is minor units (cents), e.g. 2493 → $24.93
+      if (typeof json.amount === "number" && Number.isFinite(json.amount)) {
+        creditsUsd = json.amount / 100;
+      } else if (json.balance?.credits?.amount_minor != null) {
+        const exp = json.balance.credits.exponent ?? 2;
+        creditsUsd = json.balance.credits.amount_minor / 10 ** exp;
+      }
+      ok = true;
+    } else {
+      detail = `Console credits API ${res.status}${
+        res.status === 401 || res.status === 403
+          ? " — log into platform.claude.com in Firefox (or set CLAUDE_SESSION_KEY)"
+          : ""
+      }`;
+    }
+  } catch (e) {
+    detail = e instanceof Error ? e.message : String(e);
+  }
+
+  try {
+    const res = await fetch(`${base}/current_spend`, {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const json = (await res.json()) as { amount?: number; resets_at?: string };
+      // amount is cents, e.g. 15107 → $151.07
+      if (typeof json.amount === "number" && Number.isFinite(json.amount)) {
+        spentUsd = json.amount / 100;
+      }
+      ok = true;
+    } else if (!detail) {
+      detail = `Console spend API ${res.status}`;
+    }
+  } catch (e) {
+    if (!detail) detail = e instanceof Error ? e.message : String(e);
+  }
+
+  return { creditsUsd, spentUsd, ok, detail };
+}
 
 /** Sum token fields from a Usage API result row (matches Console dashboard volume). */
 function sumAnthropicUsageTokens(r: {
@@ -194,126 +397,159 @@ async function fetchAnthropicReportPages(
 }
 
 /**
- * Anthropic Usage & Cost Admin API (requires sk-ant-admin01-… key).
- * Mirrors platform.claude.com/dashboard / usage / cost for the Console org.
+ * Claude Console live data for the provider card.
  *
- * - Spend this month → cost_report (USD, amounts in cents)
- * - Token volume → usage_report/messages (includes cache read + cache creation)
- * - Organization credits → NOT available. The Admin API exposes only
- *   usage_report/messages and cost_report, both date-range reports; there is no
- *   balance endpoint (verified against the Usage & Cost API docs). Unlike xAI
- *   and Nous, a live Claude balance cannot be fetched, so it is derived from a
- *   configured baseline minus real spend since that date — see
- *   anthropicCreditsRemaining().
+ * Primary (matches platform.claude.com/dashboard cards exactly):
+ * - Organization credits → session API /prepaid/credits
+ * - Spend this month     → session API /current_spend
  *
- * https://platform.claude.com/docs/en/manage-claude/usage-cost-api
+ * Secondary (Admin API key):
+ * - Token volume + cost_report fallback when session is unavailable
+ *
+ * Session auth: Firefox login to platform.claude.com, or CLAUDE_SESSION_KEY.
  */
 async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
   ensureSecretsLoaded();
   const adminKey =
     process.env.ANTHROPIC_ADMIN_KEY?.trim() ||
     process.env.ANTHROPIC_ADMIN_API_KEY?.trim();
-  if (!adminKey) {
+  const consoleAuth = loadClaudeConsoleAuth();
+
+  if (!adminKey && !consoleAuth) {
     return {
       tokens: 0,
       costUsd: 0,
       ok: false,
-      detail: "Set ANTHROPIC_ADMIN_KEY for live Claude Console usage",
+      detail:
+        "Set ANTHROPIC_ADMIN_KEY and/or log into platform.claude.com in Firefox (or CLAUDE_SESSION_KEY) for live Claude Console data",
     };
   }
 
   const starting = startOfMonthUtc().toISOString();
   const ending = endOfNextDayUtc().toISOString();
-  const headers = {
-    "anthropic-version": "2023-06-01",
-    "x-api-key": adminKey,
-    "User-Agent": "Cortex/0.2 (provider-usage; +local)",
-  };
+  const adminHeaders = adminKey
+    ? {
+        "anthropic-version": "2023-06-01",
+        "x-api-key": adminKey,
+        "User-Agent": "Cortex/0.2 (provider-usage; +local)",
+      }
+    : null;
 
   let tokens = 0;
   let costUsd = 0;
+  let creditsAvailable: number | null = null;
   let ok = false;
+  let consoleLive = false;
   let detail: string | undefined;
   let orgName: string | undefined;
-  let orgId: string | undefined;
+  let orgId =
+    process.env.ANTHROPIC_ORG_ID?.trim() ||
+    process.env.CLAUDE_ORG_ID?.trim() ||
+    consoleAuth?.orgId;
 
-  // Resolve which Console org this admin key belongs to
-  try {
-    const meRes = await fetch("https://api.anthropic.com/v1/organizations/me", {
-      headers,
-      signal: AbortSignal.timeout(10_000),
-      cache: "no-store",
-    });
-    if (meRes.ok) {
-      const me = (await meRes.json()) as { id?: string; name?: string };
-      orgName = me.name || undefined;
-      orgId = me.id || undefined;
+  // 1) Live dashboard cards (credits + spend) — same source as the Console UI
+  if (consoleAuth) {
+    const dash = await fetchClaudeConsoleDashboard(consoleAuth);
+    if (dash.ok) {
+      if (dash.creditsUsd != null) creditsAvailable = dash.creditsUsd;
+      if (dash.spentUsd != null) costUsd = dash.spentUsd;
+      ok = true;
+      consoleLive = true;
+      orgId = consoleAuth.orgId;
+    } else if (dash.detail) {
+      detail = dash.detail;
     }
-  } catch {
-    /* optional */
   }
 
-  // Messages usage (Console “Token volume” / usage page)
-  try {
-    const buckets = await fetchAnthropicReportPages(
-      "/v1/organizations/usage_report/messages",
-      {
-        starting_at: starting,
-        ending_at: ending,
-        bucket_width: "1d",
-        limit: "31",
-      },
-      headers,
-    );
-    for (const bucket of buckets) {
-      for (const raw of bucket.results || []) {
-        if (!raw || typeof raw !== "object") continue;
-        tokens += sumAnthropicUsageTokens(
-          raw as Parameters<typeof sumAnthropicUsageTokens>[0],
+  // 2) Org name via Admin key (optional)
+  if (adminHeaders) {
+    try {
+      const meRes = await fetch(
+        "https://api.anthropic.com/v1/organizations/me",
+        {
+          headers: adminHeaders,
+          signal: AbortSignal.timeout(10_000),
+          cache: "no-store",
+        },
+      );
+      if (meRes.ok) {
+        const me = (await meRes.json()) as { id?: string; name?: string };
+        orgName = me.name || undefined;
+        if (me.id) orgId = me.id;
+      }
+    } catch {
+      /* optional */
+    }
+  }
+
+  // 3) Token volume (+ Admin cost as fallback if Console spend missing)
+  if (adminHeaders) {
+    try {
+      const buckets = await fetchAnthropicReportPages(
+        "/v1/organizations/usage_report/messages",
+        {
+          starting_at: starting,
+          ending_at: ending,
+          bucket_width: "1d",
+          limit: "31",
+        },
+        adminHeaders,
+      );
+      for (const bucket of buckets) {
+        for (const raw of bucket.results || []) {
+          if (!raw || typeof raw !== "object") continue;
+          tokens += sumAnthropicUsageTokens(
+            raw as Parameters<typeof sumAnthropicUsageTokens>[0],
+          );
+        }
+      }
+      ok = true;
+    } catch (e) {
+      if (!detail) detail = e instanceof Error ? e.message : String(e);
+    }
+
+    if (!consoleLive || costUsd <= 0) {
+      try {
+        const buckets = await fetchAnthropicReportPages(
+          "/v1/organizations/cost_report",
+          {
+            starting_at: starting,
+            ending_at: ending,
+            bucket_width: "1d",
+            limit: "31",
+          },
+          adminHeaders,
         );
+        let adminCost = 0;
+        for (const bucket of buckets) {
+          for (const raw of bucket.results || []) {
+            if (!raw || typeof raw !== "object") continue;
+            const r = raw as { amount?: string | number };
+            const cents =
+              typeof r.amount === "string"
+                ? Number(r.amount)
+                : Number(r.amount ?? 0);
+            if (Number.isFinite(cents)) adminCost += cents / 100;
+          }
+        }
+        if (!consoleLive) costUsd = adminCost;
+        ok = true;
+      } catch (e) {
+        if (!detail) detail = e instanceof Error ? e.message : String(e);
       }
     }
-    ok = true;
-  } catch (e) {
-    detail = e instanceof Error ? e.message : String(e);
   }
-
-  // Cost report (Console “Spend this month”) — amounts are cents as decimal strings
-  try {
-    const buckets = await fetchAnthropicReportPages(
-      "/v1/organizations/cost_report",
-      {
-        starting_at: starting,
-        ending_at: ending,
-        bucket_width: "1d",
-        limit: "31",
-      },
-      headers,
-    );
-    for (const bucket of buckets) {
-      for (const raw of bucket.results || []) {
-        if (!raw || typeof raw !== "object") continue;
-        const r = raw as { amount?: string | number };
-        const cents =
-          typeof r.amount === "string" ? Number(r.amount) : Number(r.amount ?? 0);
-        if (Number.isFinite(cents)) costUsd += cents / 100;
-      }
-    }
-    ok = true;
-  } catch (e) {
-    if (!detail) detail = e instanceof Error ? e.message : String(e);
-  }
-
-  // Derive remaining credits (no balance endpoint exists — see the note above)
-  const credits = await anthropicCreditsRemaining(headers);
-  if (credits.detail && !detail) detail = credits.detail;
 
   const emptyOrgUsage = ok && tokens === 0 && costUsd === 0;
   const orgLabel = orgName ? `“${orgName}”` : "Console org";
   if (ok) {
-    detail = emptyOrgUsage
-      ? `Claude Console ${orgLabel}: $0 spend / 0 tokens this month via Admin API. Organization credits need CLAUDE_CREDITS_AVAILABLE (no public balance API).`
-      : `Live Claude Console ${orgLabel} (platform.claude.com/dashboard) · Admin Usage & Cost API`;
+    if (consoleLive) {
+      detail = `Live from platform.claude.com/dashboard (${orgLabel}) · prepaid credits + current spend`;
+    } else if (emptyOrgUsage) {
+      detail = `Claude ${orgLabel}: Admin API returned $0 this month. Log into platform.claude.com in Firefox for live credits/spend.`;
+    } else {
+      detail = `Live Claude Admin Usage & Cost for ${orgLabel} (credits need Console session)`;
+    }
   }
 
   return {
@@ -324,86 +560,9 @@ async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
     orgName,
     orgId,
     emptyOrgUsage,
-    creditsAvailable: credits.usd,
+    creditsAvailable,
+    consoleLive,
   };
-}
-
-/**
- * Remaining Claude credits, derived rather than fetched.
- *
- * Anthropic publishes no balance endpoint, so a static number goes stale the
- * moment you spend anything — the card read $87.02 against a real $46.92
- * because it was a hand-typed constant nobody updated. Instead: anchor a
- * balance you read off the dashboard at a point in time, then subtract the
- * spend the Cost API reports since that instant.
- *
- *   CLAUDE_CREDITS_BASELINE_USD  balance in USD when you last checked
- *   CLAUDE_CREDITS_BASELINE_AT   ISO-8601 timestamp of that reading
- *
- * Accurate until the next top-up, at which point re-anchor both values.
- * Returns null when unconfigured so the caller can fall back to the static
- * CLAUDE_CREDITS_AVAILABLE, and `stale: true` when the baseline is unusable so
- * the UI can say so rather than showing a confidently wrong figure.
- */
-async function anthropicCreditsRemaining(
-  headers: Record<string, string>,
-): Promise<{ usd: number | null; detail?: string }> {
-  const rawBaseline = process.env.CLAUDE_CREDITS_BASELINE_USD?.trim();
-  const rawAt = process.env.CLAUDE_CREDITS_BASELINE_AT?.trim();
-  if (!rawBaseline || !rawAt) return { usd: null };
-
-  const baseline = Number(rawBaseline);
-  const at = Date.parse(rawAt);
-  if (!Number.isFinite(baseline) || !Number.isFinite(at)) {
-    return {
-      usd: null,
-      detail: "CLAUDE_CREDITS_BASELINE_USD / _AT are not a number and a date",
-    };
-  }
-
-  // cost_report only reports COMPLETE UTC days: it truncates both bounds to day
-  // boundaries and then requires end > start, so a range beginning today is a
-  // 400 ("ending date must be after starting date"), not an empty result. Align
-  // the start to its UTC day and, when the baseline is today, report zero spend
-  // rather than failing — there are no billed days to subtract yet.
-  const dayStart = (ms: number) => {
-    const d = new Date(ms);
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-  };
-  const baselineDay = dayStart(at);
-  const todayDay = dayStart(Date.now());
-  if (baselineDay >= todayDay) {
-    return { usd: Math.max(0, baseline) };
-  }
-
-  try {
-    const buckets = await fetchAnthropicReportPages(
-      "/v1/organizations/cost_report",
-      {
-        starting_at: new Date(baselineDay).toISOString(),
-        ending_at: endOfNextDayUtc().toISOString(),
-        bucket_width: "1d",
-        limit: "31",
-      },
-      headers,
-    );
-    let spentCents = 0;
-    for (const bucket of buckets) {
-      for (const raw of bucket.results || []) {
-        if (!raw || typeof raw !== "object") continue;
-        const r = raw as { amount?: string | number };
-        const cents = Number(r.amount ?? 0);
-        if (Number.isFinite(cents)) spentCents += cents;
-      }
-    }
-    return { usd: Math.max(0, baseline - spentCents / 100) };
-  } catch (e) {
-    // Don't invent a number from a failed fetch — that is how $87.02 happened.
-    return {
-      usd: null,
-      detail: `credit derivation failed: ${e instanceof Error ? e.message : String(e)}`,
-    };
-  }
 }
 
 function creditsFromEnv(provider: ProviderId): number | null {
@@ -1156,7 +1315,9 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
   const claudeConfigured = Boolean(
     process.env.ANTHROPIC_API_KEY?.trim() ||
       process.env.ANTHROPIC_ADMIN_KEY?.trim() ||
-      process.env.ANTHROPIC_ADMIN_API_KEY?.trim(),
+      process.env.ANTHROPIC_ADMIN_API_KEY?.trim() ||
+      process.env.CLAUDE_SESSION_KEY?.trim() ||
+      loadClaudeConsoleAuth(),
   );
   const grokConfigured = Boolean(
     process.env.XAI_API_KEY?.trim() ||
@@ -1166,11 +1327,11 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
   // Hermes agents are always available locally; live credits need portal auth
   const hermesConfigured = true;
 
-  // Prefer Admin API when it has real usage. If the Console org is empty
-  // (common for a new org created only to mint an admin key), fall back to
-  // Cortex-local Claude agent metrics so the card isn't a blank zero.
+  // Console session (dashboard) wins for credits + spend; Admin API for tokens.
+  // Only fall back to local when both Console and Admin report empty.
   const claudeUseLocalFallback =
     anthropic.ok &&
+    !anthropic.consoleLive &&
     anthropic.emptyOrgUsage &&
     (claudeLocal.tokens > 0 || claudeLocal.costUsd > 0);
   const claudeTokens = claudeUseLocalFallback
@@ -1178,15 +1339,20 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
     : anthropic.ok
       ? anthropic.tokens
       : claudeLocal.tokens;
-  const claudeSpend = claudeUseLocalFallback
-    ? claudeLocal.costUsd
-    : anthropic.ok
+  const claudeSpend =
+    anthropic.ok && anthropic.costUsd > 0
       ? anthropic.costUsd
-      : claudeLocal.costUsd;
+      : claudeUseLocalFallback
+        ? claudeLocal.costUsd
+        : anthropic.ok
+          ? anthropic.costUsd
+          : claudeLocal.costUsd;
 
-  // Derived balance (baseline − spend since) wins; the static env value is a
-  // legacy fallback and is stale by construction.
-  const claudeCredits = anthropic.creditsAvailable ?? creditsFromEnv("claude");
+  // Live Console prepaid credits first; env only if session unavailable
+  const claudeCredits =
+    anthropic.creditsAvailable != null
+      ? anthropic.creditsAvailable
+      : creditsFromEnv("claude");
 
   const grokCredits =
     xai.ok && xai.creditsAvailable != null
@@ -1235,15 +1401,20 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
       tokensThisMonthLabel: formatTokens(claudeTokens),
       source: claudeUseLocalFallback
         ? "mixed"
-        : anthropic.ok
-          ? "anthropic-admin"
-          : "local",
+        : anthropic.consoleLive
+          ? anthropic.tokens > 0
+            ? "mixed"
+            : "claude-console"
+          : anthropic.ok
+            ? "anthropic-admin"
+            : "local",
       detail: claudeUseLocalFallback
         ? `${anthropic.detail || "Admin org has $0 this month."} Showing Cortex local Claude agents (${formatTokens(claudeLocal.tokens)}, ${formatUsd(claudeLocal.costUsd)} est.).`
         : anthropic.ok
-          ? anthropic.detail || "Live from Anthropic Admin Usage & Cost API"
+          ? anthropic.detail ||
+            "Live from Claude Console dashboard + Admin Usage API"
           : anthropic.detail ||
-            "Local Cortex usage. Add ANTHROPIC_ADMIN_KEY for Console-linked spend.",
+            "Local Cortex usage. Log into platform.claude.com (Firefox) and set ANTHROPIC_ADMIN_KEY.",
       consoleUrl: "https://platform.claude.com/dashboard",
       configured: claudeConfigured,
     },
