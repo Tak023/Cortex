@@ -82,10 +82,14 @@ export function AgentTerminal({ agent, label }: Props) {
       const host = hostRef.current;
       if (!host) return;
 
-      const { Terminal } = await import("@xterm/xterm");
-      const { FitAddon } = await import("@xterm/addon-fit");
-      const { WebLinksAddon } = await import("@xterm/addon-web-links");
-      await import("@xterm/xterm/css/xterm.css");
+      // Load in parallel. Serially awaiting four modules delayed first paint of
+      // the terminal for no reason — none of them depend on each other.
+      const [{ Terminal }, { FitAddon }, { WebLinksAddon }] = await Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-fit"),
+        import("@xterm/addon-web-links"),
+        import("@xterm/xterm/css/xterm.css"),
+      ]);
 
       if (disposed) return;
 

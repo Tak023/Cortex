@@ -119,6 +119,18 @@ function AiAgentButton({
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
 
+  const href = `/agents/terminal?agent=${encodeURIComponent(id)}`;
+
+  // Warm the route (and with it the xterm chunk) before the click, so opening a
+  // terminal is not waiting on a cold code-split load.
+  const prefetch = () => {
+    try {
+      router.prefetch(href);
+    } catch {
+      /* prefetch is best-effort */
+    }
+  };
+
   const launch = async () => {
     if (busy) return;
     setBusy(true);
@@ -126,8 +138,7 @@ function AiAgentButton({
     try {
       // Always open inside the main Cortex window (same shell).
       // PTY is hosted by Electron main process — not macOS Terminal.app.
-      const path = `/agents/terminal?agent=${encodeURIComponent(id)}`;
-      router.push(path);
+      router.push(href);
       setHint("Opening…");
       window.setTimeout(() => setHint(null), 1200);
     } catch (e) {
@@ -142,6 +153,8 @@ function AiAgentButton({
       <button
         type="button"
         onClick={() => void launch()}
+        onMouseEnter={prefetch}
+        onFocus={prefetch}
         disabled={busy}
         title={description}
         aria-current={active ? "page" : undefined}
