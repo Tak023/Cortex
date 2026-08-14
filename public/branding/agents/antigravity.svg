@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="Antigravity">
+  <rect width="32" height="32" rx="8" fill="#0B1020"/>
+  <circle cx="16" cy="16" r="8.2" stroke="#8B9CFF" stroke-width="1.4" opacity="0.85"/>
+  <circle cx="16" cy="16" r="4.4" stroke="#C4CDFF" stroke-width="1.2"/>
+  <circle cx="16" cy="7.6" r="1.7" fill="#E8ECFF"/>
+  <path fill="#8B9CFF" d="M15.15 12.2h1.7l2.55 8.4h-1.7l-.5-1.75h-2.4L14.3 20.6h-1.7l2.55-8.4zm.2 5.3h1.3l-.65-2.25-.65 2.25z"/>
+</svg>

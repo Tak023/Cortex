@@ -149,6 +149,21 @@ export function resolveAgentCommand(id: ExternalAgentId): ResolvedAgentCommand {
         "Grok CLI not found. Install Grok Build / grok CLI (~/.grok/bin/grok).",
       );
     }
+    case "antigravity": {
+      const bin = whichLike([
+        "agy",
+        "antigravity",
+        path.join(os.homedir(), ".local/bin/agy"),
+        path.join(os.homedir(), ".gemini/antigravity-cli/bin/agy"),
+      ]);
+      if (bin) {
+        return ok(id, bin, [], `Resolved Antigravity CLI (${bin})`);
+      }
+      return fail(
+        id,
+        "Antigravity CLI not found. Install with `curl -fsSL https://antigravity.google/cli/install.sh | bash` so `agy` is on PATH (~/.local/bin/agy).",
+      );
+    }
     default:
       return fail(id, `Unknown agent: ${id}`);
   }

@@ -2,7 +2,12 @@
  * Client-safe catalog of external AI coding agents (no Node APIs).
  */
 
-export type ExternalAgentId = "hermes" | "claude-code" | "codex" | "grok";
+export type ExternalAgentId =
+  | "hermes"
+  | "claude-code"
+  | "codex"
+  | "grok"
+  | "antigravity";
 
 export const EXTERNAL_AGENTS: Array<{
   id: ExternalAgentId;
@@ -37,5 +42,11 @@ export const EXTERNAL_AGENTS: Array<{
     description: "Open Grok Code in an in-app terminal",
     // Official xAI / Grok monogram
     iconSrc: "/branding/agents/grok.svg",
+  },
+  {
+    id: "antigravity",
+    label: "Antigravity",
+    description: "Open Antigravity CLI (`agy`) in an in-app terminal",
+    iconSrc: "/branding/agents/antigravity.svg",
   },
 ];

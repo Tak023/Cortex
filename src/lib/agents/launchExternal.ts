@@ -1,5 +1,5 @@
 /**
- * Launch external AI coding agents (Hermes, Claude Code, Codex, Grok).
+ * Launch external AI coding agents (Hermes, Claude Code, Codex, Grok, Antigravity).
  * Runs on the Node server (including Electron-packaged Next).
  * Do not import this module from client components — use externalAgents.ts.
  */
@@ -235,6 +235,29 @@ function launchCodex(): LaunchResult {
   };
 }
 
+function launchAntigravity(): LaunchResult {
+  const bin = whichLike([
+    "agy",
+    "antigravity",
+    path.join(os.homedir(), ".local/bin/agy"),
+    path.join(os.homedir(), ".gemini/antigravity-cli/bin/agy"),
+  ]);
+  if (bin && openInMacTerminal(shellQuote(bin))) {
+    return {
+      ok: true,
+      agent: "antigravity",
+      method: "terminal",
+      detail: `Launched Antigravity CLI in Terminal (${bin})`,
+    };
+  }
+  return {
+    ok: false,
+    agent: "antigravity",
+    detail:
+      "Antigravity CLI not found. Install with `curl -fsSL https://antigravity.google/cli/install.sh | bash` so `agy` is on PATH (~/.local/bin/agy).",
+  };
+}
+
 function launchGrok(): LaunchResult {
   const bin = whichLike([
     "grok",
@@ -267,6 +290,8 @@ export function launchExternalAgent(id: ExternalAgentId): LaunchResult {
       return launchCodex();
     case "grok":
       return launchGrok();
+    case "antigravity":
+      return launchAntigravity();
     default:
       return {
         ok: false,

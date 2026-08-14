@@ -67,6 +67,15 @@ const AGENTS = {
       path.join(os.homedir(), ".local/bin/grok"),
     ],
   },
+  antigravity: {
+    label: "Antigravity",
+    bins: [
+      "agy",
+      "antigravity",
+      path.join(os.homedir(), ".local/bin/agy"),
+      path.join(os.homedir(), ".gemini/antigravity-cli/bin/agy"),
+    ],
+  },
 };
 
 function resolveAgent(agentId) {

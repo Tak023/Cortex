@@ -21,7 +21,7 @@ const PHASE_PRIMARY_ROLES: Record<PipelinePhase, AgentRole[]> = {
  * | implementation   | Claude Code     | Best code generation                     |
  * | testing          | Codex           | Strong tests + fast iteration            |
  * | polish           | Claude Code     | UX/polish quality                        |
- * | brainstorm       | Grok            | Creative ideation                        |
+ * | brainstorm       | Grok / Antigravity | Creative ideation                     |
  */
 export const PHASE_PREFERRED_AGENT_IDS: Record<
   PipelinePhase | "brainstorm",
@@ -65,6 +65,7 @@ export const PHASE_PREFERRED_AGENT_IDS: Record<
   ],
   brainstorm: [
     "agent-grok",
+    "agent-antigravity",
     "agent-hermes",
     "agent-jarvis",
     "agent-lmstudio-gemma4",
@@ -112,7 +113,9 @@ export function routeAgent(
     // Prefer cloud coding agents for implementation/testing when strengths close
     if (
       (phase === "implementation" || phase === "testing" || phase === "architecture") &&
-      (agent.id === "agent-claude-code" || agent.id === "agent-codex")
+      (agent.id === "agent-claude-code" ||
+        agent.id === "agent-codex" ||
+        agent.id === "agent-antigravity")
     ) {
       score += 8;
     }

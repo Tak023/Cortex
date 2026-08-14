@@ -136,6 +136,10 @@ function load(): AppState {
       const raw = fs.readFileSync(stateFile, "utf-8");
       const parsed = JSON.parse(raw) as AppState;
       // Merge default agents if new ones appear (e.g. OpenJarvis after upgrade)
+      const removed = new Set(["agent-cursor"]);
+      const before = parsed.agents.length;
+      parsed.agents = parsed.agents.filter((a) => !removed.has(a.id));
+      const agentsRemoved = before - parsed.agents.length;
       const byId = new Map(parsed.agents.map((a) => [a.id, a]));
       let agentsAdded = 0;
       for (const def of DEFAULT_AGENTS) {
@@ -155,8 +159,7 @@ function load(): AppState {
         mcpServers: mergeMcpStates(parsed.settings?.mcpServers),
       };
       memory = parsed;
-      if (agentsAdded > 0) {
-        // Persist so upgrades stick across restarts
+      if (agentsAdded > 0 || agentsRemoved > 0) {
         persist();
       }
       return memory;
