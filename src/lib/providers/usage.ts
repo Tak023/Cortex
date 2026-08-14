@@ -1295,8 +1295,13 @@ async function fetchNousMonth(): Promise<NousMonth> {
     process.env.HERMES_ORG_SLUG?.trim() ||
     DEFAULT_NOUS_ORG_SLUG;
 
-  let creditsAvailable: number | null = creditsFromEnv("hermes");
-  let spentThisMonth: number | null = localDash.spentUsd;
+  // Match portal.nousresearch.com/orgs/{slug}/billing:
+  //   credits = subscription credits remaining (not prepaid wallet)
+  //   spent   = monthly allotment − remaining (not monthlyCap / auto-reload)
+  let creditsAvailable: number | null = null;
+  let spentThisMonth: number | null = null;
+  let monthlyCredits: number | null = null;
+  let prepaidWallet: number | null = null;
   let tokensThisMonth: number | null = localDash.tokens;
   let ok = localDash.ok;
   let detail: string | undefined = localDash.detail;
@@ -1380,30 +1385,18 @@ async function fetchNousMonth(): Promise<NousMonth> {
       if (json.organisation?.slug) resolvedSlug = json.organisation.slug;
       plan = json.subscription?.plan || plan;
 
-      const usable =
-        moneyNum(json.paid_service_access?.total_usable_credits) ??
-        moneyNum(json.subscription?.credits_remaining);
+      const remaining =
+        moneyNum(json.subscription?.credits_remaining) ??
+        moneyNum(json.paid_service_access?.subscription_credits_remaining);
+      const monthly = moneyNum(json.subscription?.monthly_credits);
       const purchased =
         moneyNum(json.paid_service_access?.purchased_credits_remaining) ??
-        moneyNum(json.purchased_credits_remaining) ??
-        0;
-      if (usable != null) creditsAvailable = usable;
-      else if (purchased > 0) creditsAvailable = purchased;
-
-      const monthly = moneyNum(json.subscription?.monthly_credits);
-      const remaining =
-        moneyNum(json.paid_service_access?.subscription_credits_remaining) ??
-        moneyNum(json.subscription?.credits_remaining);
+        moneyNum(json.purchased_credits_remaining);
+      if (remaining != null) creditsAvailable = remaining;
+      if (monthly != null) monthlyCredits = monthly;
+      if (purchased != null) prepaidWallet = purchased;
       if (monthly != null && remaining != null && monthly >= remaining) {
         spentThisMonth = Math.max(0, monthly - remaining);
-      }
-      const memberSpend = moneyNum(json.paid_service_access?.member_spend_usd);
-      if (
-        memberSpend != null &&
-        (spentThisMonth == null || memberSpend > spentThisMonth)
-      ) {
-        // Prefer higher of cycle usage vs member spend when both present
-        if (spentThisMonth == null) spentThisMonth = memberSpend;
       }
       ok = true;
       detail = `Live from Nous Portal${plan ? ` (${plan})` : ""} · org ${resolvedSlug}`;
@@ -1436,18 +1429,11 @@ async function fetchNousMonth(): Promise<NousMonth> {
       };
       if (json.org?.slug) resolvedSlug = json.org.slug;
       const bal = moneyNum(json.balanceUsd);
-      // Prepaid top-up wallet (often 0 when only subscription credits remain)
+      // Prepaid / auto-reload wallet is a separate balance on the billing
+      // page — do not add it to subscription credits or treat monthlyCap
+      // spend as the card's "Spent / mo".
       if (bal != null && bal > 0) {
-        creditsAvailable =
-          creditsAvailable != null ? creditsAvailable + bal : bal;
-      }
-      const calSpend = moneyNum(json.monthlyCap?.spentThisMonthUsd);
-      if (calSpend != null && calSpend > 0) {
-        // Calendar-month prepaid spend; keep max with subscription-period usage
-        spentThisMonth =
-          spentThisMonth != null
-            ? Math.max(spentThisMonth, calSpend)
-            : calSpend;
+        prepaidWallet = prepaidWallet ?? bal;
       }
       ok = true;
       if (!detail) {
@@ -1478,16 +1464,10 @@ async function fetchNousMonth(): Promise<NousMonth> {
       if (json.current?.tierName) plan = json.current.tierName;
       const monthly = moneyNum(json.current?.monthlyCredits);
       const remaining = moneyNum(json.current?.creditsRemaining);
-      if (remaining != null) {
-        creditsAvailable =
-          creditsAvailable != null
-            ? Math.max(creditsAvailable, remaining)
-            : remaining;
-      }
+      if (remaining != null) creditsAvailable = remaining;
+      if (monthly != null) monthlyCredits = monthly;
       if (monthly != null && remaining != null && monthly >= remaining) {
-        const used = Math.max(0, monthly - remaining);
-        spentThisMonth =
-          spentThisMonth != null ? Math.max(spentThisMonth, used) : used;
+        spentThisMonth = Math.max(0, monthly - remaining);
       }
       ok = true;
       detail = `Live from Nous Portal${plan ? ` (${plan})` : ""} · org ${resolvedSlug}`;
@@ -1516,9 +1496,13 @@ async function fetchNousMonth(): Promise<NousMonth> {
   }
 
   if (ok && creditsAvailable != null) {
-    detail = `Live Nous Portal${plan ? ` (${plan})` : ""} · org ${resolvedSlug}${
-      localDash.ok ? " + Hermes local dashboard" : ""
-    }`;
+    const wallet =
+      prepaidWallet != null && prepaidWallet > 0
+        ? ` · $${prepaidWallet.toFixed(0)} prepaid wallet`
+        : "";
+    const allotment =
+      monthlyCredits != null ? ` of $${monthlyCredits.toFixed(0)}` : "";
+    detail = `Live Nous Portal${plan ? ` (${plan})` : ""} · org ${resolvedSlug}${allotment}${wallet}`;
   } else if (ok) {
     detail =
       detail ||
