@@ -47,6 +47,6 @@ export const EXTERNAL_AGENTS: Array<{
     id: "antigravity",
     label: "Antigravity",
     description: "Open Antigravity CLI (`agy`) in an in-app terminal",
-    iconSrc: "/branding/agents/antigravity.svg",
+    iconSrc: "/branding/agents/antigravity.png",
   },
 ];
