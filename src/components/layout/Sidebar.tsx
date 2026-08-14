@@ -17,6 +17,7 @@ import {
   Plug,
   Loader2,
   SquareTerminal,
+  Search,
 } from "lucide-react";
 import { BrandLogo } from "@/components/layout/BrandLogo";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,12 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/orchestration", label: "Orchestration", icon: Activity },
       { href: "/mcp", label: "MCP Servers", icon: Plug },
       { href: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
+  {
+    title: "Video Generator",
+    items: [
+      { href: "/video-generator/research", label: "Research", icon: Search },
     ],
   },
 ];
