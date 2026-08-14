@@ -7,7 +7,7 @@
  *   credits + spend this month (same data as the dashboard cards)
  * - Anthropic Admin API (ANTHROPIC_ADMIN_KEY) — token volume / cost reports
  * - xAI Management API (XAI_MANAGEMENT_KEY) — team prepaid balance & cycle spend
- * - Nous Portal (Hermes OAuth in ~/.hermes/auth.json, or NOUS_PORTAL_TOKEN)
+ * - Nous Portal (Hermes OAuth in ~/.hermes/auth.json; expired env JWTs are ignored)
  */
 
 import { execFileSync } from "child_process";
@@ -918,6 +918,12 @@ type HermesAuthStore = {
   expiresAt?: string;
 };
 
+type NousAuthStatus = {
+  auth: HermesAuthStore | null;
+  /** Why OAuth is missing / unusable (from Hermes last_auth_error) */
+  reason?: string;
+};
+
 type NousMonth = {
   creditsAvailable: number | null;
   spentThisMonth: number | null;
@@ -956,198 +962,404 @@ function hermesAuthJsonPath(): string {
   );
 }
 
-/** Read Nous OAuth from env or Hermes CLI auth store (~/.hermes/auth.json). */
-function loadHermesAuth(): HermesAuthStore | null {
+function portalBaseFromEnv(): string {
+  return (
+    process.env.HERMES_PORTAL_BASE_URL?.trim() ||
+    process.env.NOUS_PORTAL_BASE_URL?.trim() ||
+    DEFAULT_NOUS_PORTAL
+  ).replace(/\/$/, "");
+}
+
+/** JWT with a past/near-past exp is unusable. Opaque keys (sk-…) stay valid. */
+function tokenExpired(token: string, expiresAt?: string, skewMs = 5_000): boolean {
+  const expMs = jwtExpMs(token) ?? (expiresAt ? Date.parse(expiresAt) : null);
+  return expMs != null && Number.isFinite(expMs) && expMs <= Date.now() + skewMs;
+}
+
+let lastHermesRefreshAt = 0;
+const HERMES_REFRESH_COOLDOWN_MS = 30_000;
+
+/**
+ * Ask Hermes (the token owner) to refresh Nous OAuth.
+ * Never call Portal /api/oauth/token from Cortex — refresh tokens are
+ * single-use and a dual writer revokes the whole session.
+ */
+function askHermesToRefreshNous(): boolean {
+  if (Date.now() - lastHermesRefreshAt < HERMES_REFRESH_COOLDOWN_MS) {
+    return false;
+  }
+  lastHermesRefreshAt = Date.now();
+  const hermesBin =
+    process.env.HERMES_BIN?.trim() ||
+    path.join(os.homedir(), ".local", "bin", "hermes");
+  const bin = fs.existsSync(hermesBin) ? hermesBin : "hermes";
+  try {
+    execFileSync(bin, ["auth", "status", "nous"], {
+      encoding: "utf8",
+      timeout: 12_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type NousAuthFile = {
+  providers?: {
+    nous?: {
+      access_token?: string;
+      refresh_token?: string;
+      client_id?: string;
+      portal_base_url?: string;
+      expires_at?: string;
+      agent_key?: string;
+      last_auth_error?: {
+        code?: string;
+        message?: string;
+        relogin_required?: boolean;
+      };
+    };
+  };
+};
+
+function readHermesAuthFile(): NousAuthStatus {
+  const authPath = hermesAuthJsonPath();
+  try {
+    if (!fs.existsSync(authPath)) {
+      return {
+        auth: null,
+        reason:
+          "No ~/.hermes/auth.json — run `hermes portal login` for live Nous credits.",
+      };
+    }
+    const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as NousAuthFile;
+    const nous = raw.providers?.nous;
+    const access =
+      nous?.access_token?.trim() || nous?.agent_key?.trim() || "";
+    const err = nous?.last_auth_error;
+
+    if (!access) {
+      if (err?.relogin_required || err?.code === "invalid_grant") {
+        return {
+          auth: null,
+          reason:
+            "Nous OAuth expired (refresh token rejected). Run `hermes portal login` to restore Hermes credits.",
+        };
+      }
+      return {
+        auth: null,
+        reason:
+          "Hermes is not logged into Nous Portal. Run `hermes portal login` for live credits.",
+      };
+    }
+
+    if (tokenExpired(access, nous?.expires_at)) {
+      return {
+        auth: null,
+        reason:
+          "Nous access token expired. Run `hermes portal login` (or use Hermes once) to refresh credits.",
+      };
+    }
+
+    return {
+      auth: {
+        accessToken: access,
+        refreshToken: nous?.refresh_token?.trim() || undefined,
+        clientId: nous?.client_id?.trim() || "hermes-cli",
+        portalBaseUrl: (
+          nous?.portal_base_url?.trim() || portalBaseFromEnv()
+        ).replace(/\/$/, ""),
+        authPath,
+        expiresAt: nous?.expires_at,
+      },
+    };
+  } catch {
+    return {
+      auth: null,
+      reason: "Could not read ~/.hermes/auth.json for Nous Portal credentials.",
+    };
+  }
+}
+
+/**
+ * Read Nous OAuth from Hermes CLI auth store (~/.hermes/auth.json), then a
+ * still-valid env token. Short-lived JWTs must never win over a live Hermes
+ * login — a stale NOUS_PORTAL_TOKEN is why the Hermes card can show "—".
+ *
+ * Cortex does **not** POST to /api/oauth/token. Refresh-token rotation is
+ * owned by `hermes auth status nous`.
+ */
+function loadHermesAuth(): NousAuthStatus {
   ensureSecretsLoaded();
 
   const envToken =
     process.env.NOUS_PORTAL_TOKEN?.trim() ||
     process.env.HERMES_PORTAL_TOKEN?.trim() ||
     process.env.NOUS_ACCESS_TOKEN?.trim();
-  const portalBase =
-    process.env.HERMES_PORTAL_BASE_URL?.trim() ||
-    process.env.NOUS_PORTAL_BASE_URL?.trim() ||
-    DEFAULT_NOUS_PORTAL;
+  const envUsable = Boolean(envToken && !tokenExpired(envToken));
 
-  if (envToken) {
+  let file = readHermesAuthFile();
+  if (!file.auth && file.reason?.includes("expired")) {
+    askHermesToRefreshNous();
+    file = readHermesAuthFile();
+  }
+
+  if (file.auth) return file;
+
+  if (envUsable && envToken) {
     return {
-      accessToken: envToken,
-      clientId: process.env.NOUS_CLIENT_ID?.trim() || "hermes-cli",
-      portalBaseUrl: portalBase.replace(/\/$/, ""),
+      auth: {
+        accessToken: envToken,
+        clientId: process.env.NOUS_CLIENT_ID?.trim() || "hermes-cli",
+        portalBaseUrl: portalBaseFromEnv(),
+      },
     };
   }
 
-  const authPath = hermesAuthJsonPath();
-  try {
-    if (!fs.existsSync(authPath)) return null;
-    const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
-      providers?: {
-        nous?: {
-          access_token?: string;
-          refresh_token?: string;
-          client_id?: string;
-          portal_base_url?: string;
-          expires_at?: string;
-          agent_key?: string;
-        };
-      };
-    };
-    const nous = raw.providers?.nous;
-    const access =
-      nous?.access_token?.trim() || nous?.agent_key?.trim() || "";
-    if (!access) return null;
+  if (envToken && !envUsable) {
     return {
-      accessToken: access,
-      refreshToken: nous?.refresh_token?.trim() || undefined,
-      clientId: nous?.client_id?.trim() || "hermes-cli",
-      portalBaseUrl: (
-        nous?.portal_base_url?.trim() ||
-        portalBase ||
-        DEFAULT_NOUS_PORTAL
-      ).replace(/\/$/, ""),
-      authPath,
-      expiresAt: nous?.expires_at,
+      auth: null,
+      reason:
+        file.reason ||
+        "Stale NOUS_PORTAL_TOKEN ignored (JWT expired). Hermes auth.json is the live source.",
     };
-  } catch {
-    return null;
   }
+
+  return file;
 }
 
-/** Refresh access token when near expiry; persist rotation back to auth.json. */
-async function ensureFreshNousToken(
-  auth: HermesAuthStore,
-): Promise<HermesAuthStore> {
-  const expMs =
-    jwtExpMs(auth.accessToken) ??
-    (auth.expiresAt ? Date.parse(auth.expiresAt) : null);
-  const skewMs = 90_000; // refresh 90s early
-  if (expMs != null && expMs > Date.now() + skewMs) return auth;
-  if (!auth.refreshToken) return auth;
+/**
+ * Local Hermes Agent dashboard (default http://127.0.0.1:9119).
+ * Uses the injected session token from the SPA HTML — same auth the UI uses.
+ *
+ * - GET /api/analytics/usage?days=N → local token volume + estimated cost
+ * - GET /api/portal → whether Nous OAuth is linked
+ *
+ * Complements portal billing when OAuth is available; alone fills tokens/spend
+ * from Hermes local session analytics (registered dashboard OAuth client is
+ * for dashboard login, not credit balance).
+ */
+async function fetchHermesLocalDashboard(): Promise<{
+  tokens: number | null;
+  spentUsd: number | null;
+  portalLoggedIn: boolean | null;
+  ok: boolean;
+  detail?: string;
+  baseUrl?: string;
+}> {
+  const base = (
+    process.env.HERMES_DASHBOARD_URL?.trim() ||
+    process.env.HERMES_LOCAL_DASHBOARD_URL?.trim() ||
+    "http://127.0.0.1:9119"
+  ).replace(/\/$/, "");
 
   try {
-    const res = await fetch(`${auth.portalBaseUrl}/api/oauth/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": "Cortex/0.2 (provider-usage; +local)",
-      },
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        refresh_token: auth.refreshToken,
-        client_id: auth.clientId || "hermes-cli",
-      }),
-      signal: AbortSignal.timeout(12_000),
+    const homeRes = await fetch(`${base}/`, {
+      signal: AbortSignal.timeout(4_000),
       cache: "no-store",
     });
-    if (!res.ok) return auth;
-    const json = (await res.json()) as {
-      access_token?: string;
-      refresh_token?: string;
-      expires_in?: number;
-      token_type?: string;
-      scope?: string;
-    };
-    if (!json.access_token) return auth;
-
-    const next: HermesAuthStore = {
-      ...auth,
-      accessToken: json.access_token,
-      refreshToken: json.refresh_token || auth.refreshToken,
-    };
-
-    // Persist so Hermes CLI keeps a valid refresh token chain
-    if (auth.authPath) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(auth.authPath, "utf8")) as {
-          providers?: { nous?: Record<string, unknown> };
-          [k: string]: unknown;
-        };
-        const nous = { ...(raw.providers?.nous || {}) };
-        const now = new Date();
-        const ttl = Number(json.expires_in) || 3600;
-        nous.access_token = json.access_token;
-        if (json.refresh_token) nous.refresh_token = json.refresh_token;
-        if (json.token_type) nous.token_type = json.token_type;
-        if (json.scope) nous.scope = json.scope;
-        nous.obtained_at = now.toISOString();
-        nous.expires_in = ttl;
-        nous.expires_at = new Date(now.getTime() + ttl * 1000).toISOString();
-        // agent_key often mirrors access for inference
-        if (nous.agent_key) {
-          nous.agent_key = json.access_token;
-          nous.agent_key_expires_at = nous.expires_at;
-          nous.agent_key_expires_in = ttl;
-          nous.agent_key_obtained_at = now.toISOString();
-        }
-        raw.providers = { ...(raw.providers || {}), nous };
-        raw.updated_at = now.toISOString();
-        const tmp = `${auth.authPath}.cortex-tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(raw, null, 2), { mode: 0o600 });
-        fs.renameSync(tmp, auth.authPath);
-      } catch {
-        /* in-memory token still usable this request */
-      }
+    if (!homeRes.ok) {
+      return {
+        tokens: null,
+        spentUsd: null,
+        portalLoggedIn: null,
+        ok: false,
+        detail: `Hermes dashboard ${homeRes.status} at ${base}`,
+      };
     }
-    return next;
-  } catch {
-    return auth;
+    const html = await homeRes.text();
+    const m = html.match(/__HERMES_SESSION_TOKEN__="([^"]+)"/);
+    const session = m?.[1];
+    if (!session) {
+      return {
+        tokens: null,
+        spentUsd: null,
+        portalLoggedIn: null,
+        ok: false,
+        detail: "Hermes dashboard running but no session token found",
+        baseUrl: base,
+      };
+    }
+
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${session}`,
+      "User-Agent": "Cortex/0.2 (provider-usage; +local)",
+    };
+
+    let portalLoggedIn: boolean | null = null;
+    try {
+      const pRes = await fetch(`${base}/api/portal`, {
+        headers,
+        signal: AbortSignal.timeout(6_000),
+        cache: "no-store",
+      });
+      if (pRes.ok) {
+        const p = (await pRes.json()) as { logged_in?: boolean };
+        portalLoggedIn = Boolean(p.logged_in);
+      }
+    } catch {
+      /* optional */
+    }
+
+    // Calendar month from daily buckets (Hermes stores local session analytics)
+    const days = Math.min(
+      62,
+      Math.max(
+        7,
+        new Date().getUTCDate() + 1, // days so far this month + buffer
+      ),
+    );
+    const uRes = await fetch(`${base}/api/analytics/usage?days=${days}`, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (!uRes.ok) {
+      return {
+        tokens: null,
+        spentUsd: null,
+        portalLoggedIn,
+        ok: false,
+        detail: `Hermes analytics ${uRes.status}`,
+        baseUrl: base,
+      };
+    }
+    const usage = (await uRes.json()) as {
+      daily?: Array<{
+        day?: string;
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_tokens?: number;
+        reasoning_tokens?: number;
+        estimated_cost?: number;
+        actual_cost?: number;
+      }>;
+    };
+    const monthPrefix = `${new Date().getUTCFullYear()}-${String(new Date().getUTCMonth() + 1).padStart(2, "0")}`;
+    let tokens = 0;
+    let spentUsd = 0;
+    for (const d of usage.daily || []) {
+      if (!String(d.day || "").startsWith(monthPrefix)) continue;
+      tokens +=
+        (d.input_tokens || 0) +
+        (d.output_tokens || 0) +
+        (d.cache_read_tokens || 0) +
+        (d.reasoning_tokens || 0);
+      spentUsd += Number(d.actual_cost || 0) || Number(d.estimated_cost || 0) || 0;
+    }
+
+    return {
+      tokens: tokens > 0 ? tokens : null,
+      spentUsd: spentUsd > 0 ? spentUsd : null,
+      portalLoggedIn,
+      ok: true,
+      baseUrl: base,
+      detail:
+        portalLoggedIn === false
+          ? `Hermes local dashboard (${base}) — Nous not linked; showing local analytics. Run portal login for subscription credits.`
+          : `Hermes local dashboard (${base})`,
+    };
+  } catch (e) {
+    return {
+      tokens: null,
+      spentUsd: null,
+      portalLoggedIn: null,
+      ok: false,
+      detail: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
 /**
- * Nous Portal org billing (Hermes).
- * Uses the same OAuth JWT as `hermes portal` — not HTML scraping of
- * https://portal.nousresearch.com/orgs/{slug}/billing (SPA + rate-limited).
+ * Hermes / Nous usage for the Command Center card.
  *
- * Endpoints (Bearer OAuth):
+ * Sources (best available):
+ * 1. Local Hermes dashboard (registered OAuth client / hermes dashboard :9119)
+ *    — tokens + estimated spend from session analytics
+ * 2. Nous Portal OAuth (auth.json or NOUS_PORTAL_TOKEN)
+ *    — subscription credits remaining + plan spend
+ *
+ * Endpoints (Portal Bearer OAuth):
  * - GET /api/oauth/account
  * - GET /api/billing/state
  * - GET /api/billing/subscription
  */
 async function fetchNousMonth(): Promise<NousMonth> {
   ensureSecretsLoaded();
-  let auth = loadHermesAuth();
+  const localDash = await fetchHermesLocalDashboard();
+  const { auth, reason } = loadHermesAuth();
   const orgSlug =
     process.env.NOUS_ORG_SLUG?.trim() ||
     process.env.HERMES_ORG_SLUG?.trim() ||
     DEFAULT_NOUS_ORG_SLUG;
 
+  let creditsAvailable: number | null = creditsFromEnv("hermes");
+  let spentThisMonth: number | null = localDash.spentUsd;
+  let tokensThisMonth: number | null = localDash.tokens;
+  let ok = localDash.ok;
+  let detail: string | undefined = localDash.detail;
+  let plan: string | undefined;
+  let resolvedSlug = orgSlug;
+
   if (!auth) {
+    // Local dashboard alone is enough for tokens/spend; credits need portal
+    if (localDash.ok) {
+      return {
+        creditsAvailable,
+        spentThisMonth,
+        tokensThisMonth,
+        ok: true,
+        detail:
+          (reason ? `${reason} ` : "") +
+          (localDash.detail ||
+            "Local Hermes dashboard analytics (subscription credits need portal login)."),
+        orgSlug,
+      };
+    }
     return {
-      creditsAvailable: null,
-      spentThisMonth: null,
-      tokensThisMonth: null,
+      creditsAvailable,
+      spentThisMonth: spentThisMonth,
+      tokensThisMonth: tokensThisMonth,
       ok: false,
       detail:
-        "Hermes: log in with `hermes portal login`, or set NOUS_PORTAL_TOKEN for live Nous credits.",
+        reason ||
+        "Hermes: start `hermes dashboard` and/or run `hermes portal login` for live credits.",
       orgSlug,
     };
   }
 
-  auth = await ensureFreshNousToken(auth);
-  const headers = {
+  let headers = {
     Authorization: `Bearer ${auth.accessToken}`,
     Accept: "application/json",
     "User-Agent": "Cortex/0.2 (provider-usage; +local)",
   };
-  const base = auth.portalBaseUrl;
-
-  let creditsAvailable: number | null = null;
-  let spentThisMonth: number | null = null;
-  let tokensThisMonth: number | null = null;
-  let ok = false;
-  let detail: string | undefined;
-  let plan: string | undefined;
-  let resolvedSlug = orgSlug;
+  let base = auth.portalBaseUrl;
 
   // Account: total usable + subscription remaining + member spend
   try {
-    const res = await fetch(`${base}/api/oauth/account`, {
+    let res = await fetch(`${base}/api/oauth/account`, {
       headers,
       signal: AbortSignal.timeout(12_000),
       cache: "no-store",
     });
+    if (res.status === 401) {
+      askHermesToRefreshNous();
+      const retried = loadHermesAuth();
+      if (retried.auth) {
+        headers = {
+          ...headers,
+          Authorization: `Bearer ${retried.auth.accessToken}`,
+        };
+        base = retried.auth.portalBaseUrl;
+        res = await fetch(`${base}/api/oauth/account`, {
+          headers,
+          signal: AbortSignal.timeout(12_000),
+          cache: "no-store",
+        });
+      }
+    }
     if (res.ok) {
       const json = (await res.json()) as {
         organisation?: { slug?: string; name?: string };
@@ -1284,15 +1496,40 @@ async function fetchNousMonth(): Promise<NousMonth> {
     /* optional */
   }
 
-  // Env override still wins for manual credit display
-  const envCredits = creditsFromEnv("hermes");
-  if (envCredits != null && !ok) creditsAvailable = envCredits;
+  // Prefer portal credits when present; keep local-dashboard tokens/spend if
+  // portal doesn't expose token totals (it usually doesn't).
+  if (localDash.ok) {
+    if (tokensThisMonth == null && localDash.tokens != null) {
+      tokensThisMonth = localDash.tokens;
+    }
+    if (
+      (spentThisMonth == null || spentThisMonth === 0) &&
+      localDash.spentUsd != null
+    ) {
+      spentThisMonth = localDash.spentUsd;
+    }
+  }
+
+  // Manual override only when portal didn't return credits
+  if (creditsAvailable == null) {
+    creditsAvailable = creditsFromEnv("hermes");
+  }
+
+  if (ok && creditsAvailable != null) {
+    detail = `Live Nous Portal${plan ? ` (${plan})` : ""} · org ${resolvedSlug}${
+      localDash.ok ? " + Hermes local dashboard" : ""
+    }`;
+  } else if (ok) {
+    detail =
+      detail ||
+      `Nous Portal linked${plan ? ` (${plan})` : ""} · org ${resolvedSlug}`;
+  }
 
   return {
     creditsAvailable,
     spentThisMonth,
     tokensThisMonth,
-    ok,
+    ok: ok || localDash.ok,
     detail,
     orgSlug: resolvedSlug,
     plan,
