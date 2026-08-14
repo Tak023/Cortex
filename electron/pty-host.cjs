@@ -224,6 +224,11 @@ function buildEnv() {
     HOME: home,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
+    TERM_PROGRAM: "iTerm.app",
+    COLORFGBG: "15;0",
+    FORCE_COLOR: "3",
+    CLICOLOR: "1",
+    CLICOLOR_FORCE: "1",
   };
   delete env.ELECTRON_RUN_AS_NODE;
   // The Cortex server process sets Next standalone internals (and
@@ -240,6 +245,13 @@ function buildEnv() {
     "NEXT_RUNTIME",
     "NODE_OPTIONS",
     "KEEP_ALIVE_TIMEOUT",
+    // Color-off flags: Electron/Next/CI inheritance makes every agent TUI
+    // render monochrome white. Hermes treats NO_COLOR as set-if-present.
+    "NO_COLOR",
+    "NODE_DISABLE_COLORS",
+    "CI",
+    "TF_BUILD",
+    "CLAUDE_CODE_NO_COLOR",
   ];
   for (const key of Object.keys(env)) {
     if (key.startsWith("__NEXT_PRIVATE_") || blocked.includes(key)) {

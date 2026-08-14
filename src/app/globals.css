@@ -77,6 +77,12 @@ body {
   50% { opacity: 0.5; transform: scale(0.85); }
 }
 
+/* xterm DOM renderer injects .xterm-fg-* / .xterm-bg-*. Keep the app
+   foreground from inheriting onto every cell when those rules lose. */
+.xterm {
+  color: #e8ecf4;
+}
+
 .animate-pulse-dot {
   animation: pulse-dot 1.5s ease-in-out infinite;
 }

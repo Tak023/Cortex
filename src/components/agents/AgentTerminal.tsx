@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import type { ExternalAgentId } from "@/lib/agents/externalAgents";
+import "@xterm/xterm/css/xterm.css";
 
 type Props = {
   agent: ExternalAgentId;
@@ -88,7 +89,6 @@ export function AgentTerminal({ agent, label }: Props) {
         import("@xterm/xterm"),
         import("@xterm/addon-fit"),
         import("@xterm/addon-web-links"),
-        import("@xterm/xterm/css/xterm.css"),
       ]);
 
       if (disposed) return;

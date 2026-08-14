@@ -68,9 +68,24 @@ function buildEnv(): NodeJS.ProcessEnv {
     HOME: home,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
+    TERM_PROGRAM: "iTerm.app",
+    COLORFGBG: "15;0",
+    FORCE_COLOR: "3",
+    CLICOLOR: "1",
+    CLICOLOR_FORCE: "1",
   };
   // Avoid nested Electron/Node confusion for some CLIs
   delete env.ELECTRON_RUN_AS_NODE;
+  for (const key of [
+    "NO_COLOR",
+    "NODE_DISABLE_COLORS",
+    "CI",
+    "TF_BUILD",
+    "CLAUDE_CODE_NO_COLOR",
+    "NODE_ENV",
+  ]) {
+    delete env[key];
+  }
   return env;
 }
 
