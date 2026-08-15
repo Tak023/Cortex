@@ -396,7 +396,72 @@ ${phases}
   return rel;
 }
 
+export function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+}
+
+/**
+ * Append an agent entry or session summary to the daily note (daily/YYYY-MM-DD.md)
+ * and record it in log.md.
+ */
+export function appendVaultDailyNote(entry: {
+  agent: string;
+  title: string;
+  summary: string;
+  details?: string;
+  cwd?: string;
+}): string | null {
+  if (!isVaultEnabled()) return null;
+  const dir = getVaultDir();
+  const { date, time } = nowStamp();
+  const rel = path.join("daily", `${date}.md`);
+  assertWritable(rel);
+
+  const abs = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+
+  let content = "";
+  if (fs.existsSync(abs)) {
+    try {
+      content = fs.readFileSync(abs, "utf-8");
+    } catch {
+      content = "";
+    }
+  }
+
+  if (!content.trim()) {
+    content = `# Daily Note — ${date}\n\n## Agent Activity & Notes\n\n`;
+  }
+
+  const cleanSummary = entry.summary.trim();
+  const cleanDetails = entry.details ? stripAnsi(entry.details).trim() : "";
+  const cwdInfo = entry.cwd ? `\n> Working directory: \`${entry.cwd}\`\n` : "";
+
+  const section =
+    `### ${time} · ${entry.agent} — ${entry.title}\n` +
+    cwdInfo +
+    `\n${cleanSummary}\n` +
+    (cleanDetails
+      ? `\n<details><summary>Session Output / Details</summary>\n\n\`\`\`text\n${cleanDetails.slice(0, 4000)}\n\`\`\`\n</details>\n`
+      : "") +
+    `\n---\n\n`;
+
+  content += `\n${section}`;
+  fs.writeFileSync(abs, content, "utf-8");
+  contentCache.delete(abs);
+
+  appendVaultLog(
+    entry.agent,
+    entry.title,
+    `${cleanSummary.slice(0, 120)} → [[${date}]]`,
+  );
+
+  return rel;
+}
+
 function agentLabel(project: Project, agentId: string | null): string {
   if (!agentId) return "—";
   return agentId;
 }
+

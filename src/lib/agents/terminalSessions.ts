@@ -8,6 +8,11 @@ import path from "path";
 import { nanoid } from "nanoid";
 import type { ExternalAgentId } from "./externalAgents";
 import { resolveAgentCommand } from "./resolveAgentCommand";
+import {
+  appendVaultDailyNote,
+  appendVaultLog,
+  stripAnsi,
+} from "../vault/vault";
 
 export type TerminalSessionInfo = {
   id: string;
@@ -243,6 +248,17 @@ export function createTerminalSession(opts: {
     session.exited = true;
     session.exitCode = exitCode ?? 0;
     bus.emit("exit", { exitCode: session.exitCode });
+
+    try {
+      appendVaultLog(
+        session.label,
+        "Terminal session ended",
+        `Session finished (exit code: ${session.exitCode}) in \`${session.cwd}\``,
+      );
+    } catch {
+      /* non-blocking */
+    }
+
     // Keep session briefly so clients can read exit, then drop
     setTimeout(() => {
       store().sessions.delete(id);
@@ -250,6 +266,16 @@ export function createTerminalSession(opts: {
   });
 
   store().sessions.set(id, session);
+
+  try {
+    appendVaultLog(
+      session.label,
+      "Terminal session started",
+      `In-app terminal opened in \`${session.cwd}\``,
+    );
+  } catch {
+    /* non-blocking */
+  }
 
   return {
     ok: true,
@@ -265,6 +291,33 @@ export function createTerminalSession(opts: {
     },
   };
 }
+
+export function saveTerminalSessionToVault(
+  id: string,
+  opts?: { summary?: string; title?: string },
+): { ok: boolean; path?: string | null; error?: string } {
+  const session = store().sessions.get(id);
+  if (!session) {
+    return { ok: false, error: "Session not found or expired" };
+  }
+  const rawBacklog = session.backlog.join("");
+  const clean = stripAnsi(rawBacklog);
+  const title = opts?.title || `Interactive Session (${session.label})`;
+  const summary =
+    opts?.summary ||
+    `Interactive terminal session with ${session.label}.\nCommand: \`${session.display}\``;
+
+  const rel = appendVaultDailyNote({
+    agent: session.label,
+    title,
+    summary,
+    details: clean || "(no terminal output recorded)",
+    cwd: session.cwd,
+  });
+
+  return { ok: Boolean(rel), path: rel };
+}
+
 
 export function getTerminalSession(id: string): Session | undefined {
   return store().sessions.get(id);

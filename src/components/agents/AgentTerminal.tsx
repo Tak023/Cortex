@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, BookMarked, Check, Loader2 } from "lucide-react";
 import type { ExternalAgentId } from "@/lib/agents/externalAgents";
 import "@xterm/xterm/css/xterm.css";
 
@@ -35,6 +35,32 @@ export function AgentTerminal({ agent, label }: Props) {
   >("starting");
   const [error, setError] = useState<string | null>(null);
   const [displayCmd, setDisplayCmd] = useState<string>("");
+  const [savingToVault, setSavingToVault] = useState(false);
+  const [vaultSavedPath, setVaultSavedPath] = useState<string | null>(null);
+
+  const handleSaveToVault = useCallback(async () => {
+    const id = sessionIdRef.current;
+    if (!id || savingToVault) return;
+    setSavingToVault(true);
+    try {
+      const res = await fetch(`/api/agents/terminal/${id}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Interactive Session (${label})`,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; path?: string };
+      if (data.ok && data.path) {
+        setVaultSavedPath(data.path);
+        setTimeout(() => setVaultSavedPath(null), 4000);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setSavingToVault(false);
+    }
+  }, [label, savingToVault]);
 
   const writeInput = useCallback(async (data: string) => {
     const id = sessionIdRef.current;
@@ -309,6 +335,30 @@ export function AgentTerminal({ agent, label }: Props) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSaveToVault}
+            disabled={savingToVault || !sessionIdRef.current}
+            title="Save session output to Obsidian second brain (daily note)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-panel-elevated/70 px-2.5 py-1 text-xs text-foreground/80 transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-300 disabled:opacity-40"
+          >
+            {savingToVault ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin text-muted" />
+                <span>Saving…</span>
+              </>
+            ) : vaultSavedPath ? (
+              <>
+                <Check className="h-3 w-3 text-emerald-400" />
+                <span className="text-emerald-300 font-medium">Saved to Daily Note</span>
+              </>
+            ) : (
+              <>
+                <BookMarked className="h-3 w-3 text-sky-400" />
+                <span>Save to Second Brain</span>
+              </>
+            )}
+          </button>
           <span
             className={
               status === "running"
