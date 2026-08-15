@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Bot,
+  History,
   Lightbulb,
   LayoutDashboard,
   FolderKanban,
@@ -61,6 +62,8 @@ type NavItem = {
   href: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
+  /** Only highlight on an exact path match (parent of other nav entries). */
+  exact?: boolean;
 };
 
 type NavSection = {
@@ -85,9 +88,14 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: "Video Generator",
+    title: "Research Center",
     items: [
-      { href: "/video-generator/research", label: "Research", icon: Search },
+      { href: "/research-center", label: "Research", icon: Search, exact: true },
+      {
+        href: "/research-center/history",
+        label: "History",
+        icon: History,
+      },
     ],
   },
 ];
@@ -99,8 +107,8 @@ function isAgentTerminalPath(pathname: string) {
   );
 }
 
-function isNavActive(pathname: string, href: string) {
-  if (href === "/") return pathname === "/";
+function isNavActive(pathname: string, href: string, exact = false) {
+  if (href === "/" || exact) return pathname === href;
   // Mission Control "Agents" is only the registry page — not AI Agent terminals.
   if (href === "/agents") {
     if (isAgentTerminalPath(pathname)) return false;
@@ -245,8 +253,8 @@ function SidebarNav() {
                 {section.title}
               </h2>
             </div>
-            {section.items.map(({ href, label, icon: Icon }) => {
-              const active = isNavActive(pathname, href);
+            {section.items.map(({ href, label, icon: Icon, exact }) => {
+              const active = isNavActive(pathname, href, exact);
               return (
                 <Link
                   key={href}
