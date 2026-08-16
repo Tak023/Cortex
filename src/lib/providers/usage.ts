@@ -260,6 +260,7 @@ async function fetchClaudeConsoleDashboard(
   creditsUsd: number | null;
   spentUsd: number | null;
   ok: boolean;
+  orgName?: string;
   detail?: string;
 }> {
   const headers: Record<string, string> = {
@@ -274,8 +275,23 @@ async function fetchClaudeConsoleDashboard(
 
   let creditsUsd: number | null = null;
   let spentUsd: number | null = null;
+  let orgName: string | undefined;
   let ok = false;
   let detail: string | undefined;
+
+  try {
+    const res = await fetch(base, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const json = (await res.json()) as { name?: string };
+      if (json.name) orgName = json.name;
+    }
+  } catch {
+    /* optional */
+  }
 
   try {
     const res = await fetch(`${base}/prepaid/credits`, {
@@ -328,7 +344,7 @@ async function fetchClaudeConsoleDashboard(
     if (!detail) detail = e instanceof Error ? e.message : String(e);
   }
 
-  return { creditsUsd, spentUsd, ok, detail };
+  return { creditsUsd, spentUsd, ok, orgName, detail };
 }
 
 /** Sum token fields from a Usage API result row (matches Console dashboard volume). */
@@ -453,6 +469,7 @@ async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
     if (dash.ok) {
       if (dash.creditsUsd != null) creditsAvailable = dash.creditsUsd;
       if (dash.spentUsd != null) costUsd = dash.spentUsd;
+      if (dash.orgName) orgName = dash.orgName;
       ok = true;
       consoleLive = true;
       orgId = consoleAuth.orgId;
@@ -807,6 +824,7 @@ async function fetchClaudeCodeUsage(): Promise<ClaudeCodeLive> {
           };
           spend?: {
             used?: { amount_minor?: number; exponent?: number };
+            enabled?: boolean;
           };
         })
       : {};
@@ -832,10 +850,12 @@ async function fetchClaudeCodeUsage(): Promise<ClaudeCodeLive> {
     const extra = usage.extra_usage;
     let extraCreditsUsd: number | null = null;
     let extraUsedUsd: number | null = null;
+    // Extra-usage $ is a Max/Pro overage wallet. When it is off, spend.used
+    // is $0 and must not overwrite Console prepaid / monthly spend.
     if (extra?.is_enabled && extra.monthly_limit != null) {
       extraUsedUsd = Number(extra.used_credits) || 0;
       extraCreditsUsd = Math.max(0, Number(extra.monthly_limit) - extraUsedUsd);
-    } else if (usage.spend?.used?.amount_minor != null) {
+    } else if (usage.spend?.enabled && usage.spend.used?.amount_minor != null) {
       extraUsedUsd =
         usage.spend.used.amount_minor / 10 ** (usage.spend.used.exponent ?? 2);
     }
@@ -1865,29 +1885,31 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
     : anthropic.ok
       ? anthropic.tokens
       : claudeLocal.tokens;
-  const claudeSpend =
-    claudeCode.ok && claudeCode.extraUsedUsd != null
-      ? claudeCode.extraUsedUsd
-      : anthropic.ok && anthropic.costUsd > 0
-        ? anthropic.costUsd
-        : claudeUseLocalFallback
-          ? claudeLocal.costUsd
-          : anthropic.ok
-            ? anthropic.costUsd
-            : claudeLocal.costUsd;
-
-  // Claude Code Max/Pro remaining session % / extra-usage $ first.
-  // Console prepaid is a different org (API) and is only a fallback.
-  const claudeCredits =
-    claudeCode.ok && claudeCode.extraCreditsUsd != null
-      ? claudeCode.extraCreditsUsd
-      : anthropic.creditsAvailable != null
-        ? anthropic.creditsAvailable
-        : creditsFromEnv("claude");
+  // Credits + spent/mo come from platform.claude.com (prepaid remaining +
+  // current month spend) — same cards as the Console dashboard. Claude Code
+  // Max/Pro extra-usage $ only wins when that wallet is actually enabled.
+  // Session remaining % is a quota, not a dollar credit; keep it in detail.
+  const extraWalletOn = claudeCode.ok && claudeCode.extraCreditsUsd != null;
+  const claudeCredits = extraWalletOn
+    ? claudeCode.extraCreditsUsd
+    : anthropic.creditsAvailable != null
+      ? anthropic.creditsAvailable
+      : creditsFromEnv("claude");
   const claudeCreditsLabel =
-    claudeCode.ok && claudeCode.extraCreditsUsd == null && claudeCode.remainingPct != null
-      ? `${Math.round(claudeCode.remainingPct)}% left`
-      : formatUsd(claudeCredits);
+    claudeCredits != null
+      ? formatUsd(claudeCredits)
+      : claudeCode.ok && claudeCode.remainingPct != null
+        ? `${Math.round(claudeCode.remainingPct)}% left`
+        : "—";
+  const claudeSpend = extraWalletOn && claudeCode.extraUsedUsd != null
+    ? claudeCode.extraUsedUsd
+    : anthropic.ok && (anthropic.consoleLive || anthropic.costUsd > 0)
+      ? anthropic.costUsd
+      : claudeUseLocalFallback
+        ? claudeLocal.costUsd
+        : anthropic.ok
+          ? anthropic.costUsd
+          : claudeLocal.costUsd;
 
   const grokCredits =
     xai.ok && xai.creditsAvailable != null
@@ -1934,27 +1956,36 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
       spentThisMonthLabel: formatUsd(claudeSpend),
       tokensThisMonth: claudeTokens,
       tokensThisMonthLabel: formatTokens(claudeTokens),
-      source: claudeCode.ok
-        ? "claude-console"
-        : claudeUseLocalFallback
+      source: anthropic.consoleLive
+        ? anthropic.tokens > 0 || claudeCode.ok
           ? "mixed"
-          : anthropic.consoleLive
-            ? anthropic.tokens > 0
-              ? "mixed"
-              : "claude-console"
+          : "claude-console"
+        : claudeCode.ok
+          ? "claude-console"
+          : claudeUseLocalFallback
+            ? "mixed"
             : anthropic.ok
               ? "anthropic-admin"
               : "local",
-      detail: claudeCode.ok
-        ? claudeCode.detail
-        : claudeUseLocalFallback
-          ? `${anthropic.detail || "Admin org has $0 this month."} Showing Cortex local Claude agents (${formatTokens(claudeLocal.tokens)}, ${formatUsd(claudeLocal.costUsd)} est.).`
-          : anthropic.ok
-            ? anthropic.detail ||
-              "Live from Claude Console dashboard + Admin Usage API"
-            : anthropic.detail ||
-              "Local Cortex usage. Run `claude /login` for live Claude Code credits.",
-      consoleUrl: "https://claude.ai/settings/usage",
+      detail: [
+        anthropic.consoleLive
+          ? `Live from platform.claude.com${anthropic.orgName ? ` (“${anthropic.orgName}”)` : ""} · prepaid credits + current spend`
+          : extraWalletOn
+            ? claudeCode.detail
+            : claudeUseLocalFallback
+              ? `${anthropic.detail || "Admin org has $0 this month."} Showing Cortex local Claude agents (${formatTokens(claudeLocal.tokens)}, ${formatUsd(claudeLocal.costUsd)} est.).`
+              : anthropic.ok
+                ? anthropic.detail ||
+                  "Live from Claude Console dashboard + Admin Usage API"
+                : claudeCode.ok
+                  ? claudeCode.detail
+                  : anthropic.detail ||
+                    "Local Cortex usage. Log into platform.claude.com in Firefox for live credits/spend.",
+        claudeCode.ok && anthropic.consoleLive ? claudeCode.detail : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      consoleUrl: "https://platform.claude.com/dashboard",
       configured: claudeConfigured || claudeCode.ok,
     },
     {

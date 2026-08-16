@@ -1,5 +1,7 @@
 export type ResearchKind = "website" | "youtube" | "github";
 
+export type ResearchMode = "quick" | "deep";
+
 export type ResearchResult = {
   rank: number;
   kind: ResearchKind;
@@ -15,6 +17,10 @@ export type ResearchReport = {
   topic: string;
   researchedAt: string;
   summary: string;
+  /** Long-form markdown from GPT Researcher / PaperQA2 */
+  report?: string;
+  mode?: ResearchMode;
+  engines?: string[];
   results: ResearchResult[];
   notes: string[];
   counts: { website: number; youtube: number; github: number };
@@ -26,4 +32,5 @@ export type ResearchHistoryEntry = {
   researchedAt: string;
   resultCount: number;
   counts: ResearchReport["counts"];
+  mode?: ResearchMode;
 };

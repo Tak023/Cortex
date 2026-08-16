@@ -5,8 +5,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ModeBadge, ReportBody } from "@/components/research/ReportBody";
 import { ResultsList } from "@/components/research/ResultsList";
 import { Button } from "@/components/ui/Button";
+import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import type { ResearchReport } from "@/lib/research/types";
 
 export default function ResearchHistoryDetailPage() {
@@ -43,7 +45,7 @@ export default function ResearchHistoryDetailPage() {
         title={report?.topic || "Research"}
         description={
           report
-            ? `${report.results.length} sources · ${new Date(report.researchedAt).toLocaleString()}`
+            ? `${report.mode === "quick" ? "Quick Research" : report.mode === "deep" ? "Deep Report" : "Research"} · ${report.results.length} sources · ${new Date(report.researchedAt).toLocaleString()}`
             : "Loading saved research…"
         }
         actions={
@@ -65,10 +67,34 @@ export default function ResearchHistoryDetailPage() {
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         {report ? (
           <>
-            <p className="text-sm leading-relaxed text-foreground/90">
-              {report.summary}
-            </p>
+            {report.report ? (
+              <Card>
+                <CardHeader>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h2 className="text-sm font-semibold">
+                      {report.mode === "quick" ? "Briefing" : "Report"}
+                    </h2>
+                    <ModeBadge mode={report.mode} />
+                  </div>
+                  {report.engines?.length ? (
+                    <span className="text-[11px] text-muted">
+                      {report.engines.join(" · ")}
+                    </span>
+                  ) : null}
+                </CardHeader>
+                <CardBody>
+                  <ReportBody markdown={report.report} />
+                </CardBody>
+              </Card>
+            ) : (
+              <p className="text-sm leading-relaxed text-foreground/90">
+                {report.summary}
+              </p>
+            )}
             <ResultsList results={report.results} />
+            {report.notes.length ? (
+              <p className="text-[11px] text-muted">{report.notes.join(" · ")}</p>
+            ) : null}
           </>
         ) : null}
       </div>

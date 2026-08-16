@@ -93,6 +93,7 @@ function collectDocuments(): LanceDocument[] {
     const body = [
       entry.topic,
       full?.summary || "",
+      full?.report || "",
       (full?.results || [])
         .slice(0, 20)
         .map((r) => `${r.title} ${r.snippet}`)

@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.8 |
+| **Version** | 0.2.10 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -117,13 +117,25 @@ Highlights since the initial 0.1.x release:
 - `json()` accepts a request timeout, so no fetch can leave the UI spinning forever
 - **Agent terminals open faster**: xterm and its addons load in parallel rather than sequentially, and the agent rail prefetches the terminal route on hover
 
+### Claude Code credits (0.2.10)
+
+- Command Center **Claude Code** card now shows Console **prepaid remaining** and **spend this month**, matching [platform.claude.com/dashboard](https://platform.claude.com/dashboard) (Firefox `sessionKey` for the Console org). Max / Pro session % and extra-usage status stay in the footnote — they no longer replace the dollar credits or force spent/mo to `$0` when extra usage is off
+
+### Quick Research + Deep Report (0.2.9)
+
+- **Quick Research** runs [GPT Researcher](https://github.com/assafelovic/gpt-researcher) for a short briefing plus live web / YouTube / GitHub sources (top 20)
+- **Deep Report** runs GPT Researcher and [PaperQA2](https://github.com/Future-House/paper-qa) together: a long-form web report plus literature answers from arXiv PDFs, plus the full top-50 source list
+- Both engines spawn via isolated `uv run --no-project` (scripts written to a temp file so the packaged app works). If a Python engine is missing or times out, Cortex falls back to a Grok briefing from the live sources
+- GPT Researcher talks to Grok through the OpenAI-compatible xAI API (`FAST_LLM=openai:grok-4.5`). PaperQA2 uses LiteLLM + sparse embeddings so it does not need an OpenAI embedding key. Optional `TAVILY_API_KEY` selects Tavily as the retriever; otherwise DuckDuckGo
+- History entries record the mode (Quick vs Deep) and the full markdown report
+
 ### Research Center, Antigravity, live credits (0.2.8)
 
 - **Research Center** (`/research-center`) — type or speak a topic, run **Deep research** across the live web, YouTube, and GitHub, and get the **top 50 sources** with links. History lives on disk (`research-history.json`) and in **Research Center → History**
 - **Antigravity** joins the AI Agents rail as an in-app terminal (`agy`), with the official Google Antigravity icon
 - **Agent terminals keep color** (TERM / COLORTERM / FORCE_COLOR) and can **Save to Second Brain** — session transcripts append to the vault daily note
 - **Hermes credits** match [Nous Portal billing](https://portal.nousresearch.com) (`credits_remaining` / monthly spend of the Plus plan). Do not add the prepaid wallet or monthly-cap auto-reload into that card
-- **Claude Code card** on Command Center uses the same OAuth login as the `claude` CLI (Keychain + `~/.claude/.credentials.json`), not Console prepaid. Max / Pro session remaining, extra-usage dollars, and a link to [claude.ai/settings/usage](https://claude.ai/settings/usage)
+- **Claude Code card** on Command Center shows **Console prepaid remaining** and **spend this month** from [platform.claude.com/dashboard](https://platform.claude.com/dashboard) (Firefox session). Max / Pro session % and extra-usage status stay in the detail line; they do not replace the dollar credits when Console data is live
 - **Official MCP TypeScript client** ([`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)) — isolated stdio process per agent×server, per-agent tool permissions, connect/call/idle timeouts, and an audit log on `/mcp`
 - **LanceDB** ([`@lancedb/lancedb`](https://github.com/lancedb/lancedb)) — embedded full-text index of the second brain and research history. Listed on MCP Servers; **Rebuild index** on the card; vault search merges LanceDB hits
 
@@ -149,9 +161,11 @@ Highlights since the initial 0.1.x release:
 - Speech-to-text input (Whisper-compatible backend)
 
 ### Research Center
-- Voice or text topic input and **Deep research** across web, YouTube, and GitHub
-- Top **50** live sources with classified links (web / YouTube / GitHub)
-- Local history of researched topics (reopen or delete)
+- Voice or text topic input
+- **Quick Research** — [GPT Researcher](https://github.com/assafelovic/gpt-researcher) briefing + top 20 live sources
+- **Deep Report** — GPT Researcher + [PaperQA2](https://github.com/Future-House/paper-qa) literature answers + top 50 live sources
+- Classified links (web / YouTube / GitHub) and a saved markdown report
+- Local history of researched topics (reopen or delete), tagged by mode
 
 ### Second brain (Obsidian vault)
 - Local Markdown vault as **shared agent memory** — keyword search over notes, grounded Jarvis answers, research seeded from prior knowledge
@@ -306,6 +320,7 @@ Desktop shell (Electron)
 | API | Next.js Route Handlers |
 | Orchestration | In-process TypeScript engine |
 | AI (optional) | OpenAI-compatible client → **xAI / SpaceXAI** (`https://api.x.ai/v1`, model `grok-4.5`) |
+| Research | [GPT Researcher](https://github.com/assafelovic/gpt-researcher) + [PaperQA2](https://github.com/Future-House/paper-qa) via isolated `uv run --no-project`; live web / YouTube / GitHub search; Grok fallback |
 | Storage | Local JSON file store + embedded **LanceDB** full-text index |
 | MCP | Official TypeScript SDK client (`@modelcontextprotocol/sdk`) |
 | Desktop | Electron 37, electron-builder (DMG / ZIP, macOS arm64) |
@@ -330,6 +345,7 @@ Desktop shell (Electron)
 - **macOS** on **Apple Silicon** (arm64) for the prebuilt DMG  
 - ~3 GB free disk for the installer  
 - No Node.js required for end users installing the DMG  
+- Optional: [uv](https://github.com/astral-sh/uv) on `PATH` (or `~/.local/bin/uv`) so **Quick Research** / **Deep Report** can run GPT Researcher and PaperQA2. Without `uv`, those modes still return live sources and a Grok briefing  
 
 ### Steps (end users)
 
@@ -360,6 +376,7 @@ Concept generation works offline by default. To use live Grok, set `XAI_API_KEY`
 - **npm** 10+  
 - macOS recommended for desktop packaging  
 - Optional: [xAI API key](https://console.x.ai) for live concept generation  
+- Optional: [uv](https://github.com/astral-sh/uv) for GPT Researcher / PaperQA2 research engines  
 
 ### Clone & install
 
@@ -437,7 +454,9 @@ XAI_API_KEY=
 | `ANTHROPIC_ADMIN_KEY` / `ANTHROPIC_ORG_ID` | No | Optional Claude Admin usage/token reports |
 | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | No | Raises GitHub API rate limits for GitHub search and the trending-repos tab |
 | `WHISPER_API_KEY` / `WHISPER_BASE_URL` / `WHISPER_MODEL` | No | Speech-to-text backend for Jarvis / Research voice input |
-| `TAVILY_API_KEY` | No | Optional search fallback for live answers and Research |
+| `TAVILY_API_KEY` | No | Optional search fallback for live answers and GPT Researcher (otherwise DuckDuckGo) |
+| `UV_BIN` | No | Override path to `uv` for RivalSearch, GPT Researcher, and PaperQA2 |
+| `FAST_LLM` / `SMART_LLM` | No | GPT Researcher model spec (default `openai:grok-4.5` via xAI) |
 | `FIRECRAWL_API_KEY` | No | Firecrawl MCP scrape/crawl |
 | `CORTEX_VAULT_DIR` | No | Path to the Obsidian second brain (supports `~`, default `~/Documents/hermes-second-brain`); overrides the Settings value |
 | `CORTEX_DATA_DIR` | No | Override state directory (set automatically by desktop) |
@@ -478,7 +497,7 @@ XAI_API_KEY=
 | `/agents` | Agent fleet, search, filters, controls |
 | `/agents/terminal` | Embedded terminals for launched CLI agents |
 | `/mcp` | MCP catalog, TypeScript client, permissions, LanceDB, audit |
-| `/research-center` | Deep research — voice/text topic, top 50 live sources |
+| `/research-center` | Quick Research / Deep Report — voice/text topic, briefing or full report, live sources |
 | `/research-center/history` | Past research topics |
 | `/ideas` | Idea capture, templates, concept generation |
 | `/projects` | Project list |
@@ -508,7 +527,7 @@ Cortex/
 │       ├── ai/                # Grok client + phase synthesis
 │       ├── mcp/               # Catalog, isolated SDK client, permissions, audit
 │       ├── lancedb/           # Embedded LanceDB index
-│       ├── research/          # Deep research (web / YouTube / GitHub)
+│       ├── research/          # Quick Research + Deep Report (GPT Researcher, PaperQA2, live sources)
 │       ├── vault/             # Second brain: search/write + graph layers
 │       ├── providers/         # Command Center credit cards
 │       ├── store.ts           # Local persistence
@@ -553,7 +572,7 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 | `POST` | `/api/mcp/call` | Isolated tool call (permissions + audit) |
 | `GET/DELETE` | `/api/mcp/audit` | MCP audit history |
 | `GET/POST` | `/api/lancedb` | LanceDB status; `reindex` / `search` |
-| `POST` | `/api/research` | Deep research a topic (top 50 sources) |
+| `POST` | `/api/research` | Research a topic (`mode`: `quick` \| `deep`) |
 | `GET` | `/api/research/history` | List saved research topics |
 | `GET/DELETE` | `/api/research/history/:id` | Load or delete a research report |
 | `GET/POST` | `/api/integrations/jarvis` | Jarvis live-data integration |
@@ -572,6 +591,7 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 - Desktop app listens on **localhost only**.  
 - The **second brain** is read from and written to entirely on disk — no vault content is uploaded. Note snippets do enter prompts sent to a cloud model when you use Jarvis or the pipeline with a cloud agent configured; disable the vault in Settings to prevent that.  
 - **LanceDB** lives under the Cortex data directory (`…/data/lancedb`). It is local-only.  
+- **Research history** (`research-history.json`) stores topics, source lists, and the generated markdown report on disk. Quick/Deep engines write a temp Python script under `$TMPDIR` and Deep Report may download arXiv PDFs into a temp folder; both are discarded after the run.  
 - **MCP audit** (`mcp-audit.json`) redacts secret-looking argument keys.  
 - Vault writes are limited to `projects/` and `log.md`; `raw/` is refused as read-only and paths outside the vault are rejected.
 
@@ -607,7 +627,11 @@ env -u __NEXT_PRIVATE_STANDALONE_CONFIG -u NODE_ENV -u PORT -u HOSTNAME npx next
 
 ### Claude Code credits show “—” or old Console dollars
 
-The Command Center **Claude Code** card reads the `claude` CLI login (macOS Keychain + `~/.claude/.credentials.json`), not platform.claude.com prepaid. Run `claude /login` if the card cannot refresh. Extra usage off on Max/Pro shows remaining **session %**, not a dollar balance.
+The Command Center **Claude Code** card reads **credits** and **spent/mo** from the platform.claude.com dashboard (Firefox `sessionKey`, same prepaid remaining + current spend as the Console cards). Stay logged into [platform.claude.com](https://platform.claude.com/dashboard) in Firefox so Cortex can read the Console org. Claude Code OAuth (`claude /login`) still supplies Max/Pro plan + extra-usage status in the footnote. Session remaining % is only used as the credit figure when no Console dollar balance is available.
+
+### Quick Research / Deep Report skip the Python engines
+
+Install [uv](https://github.com/astral-sh/uv) (`curl -LsSf https://astral.sh/uv/install.sh | sh`) so Cortex can run GPT Researcher and PaperQA2. The first run downloads those packages into the uv cache and can take a minute. Without `uv` or `XAI_API_KEY`, you still get live web / YouTube / GitHub sources plus a local or Grok briefing. Check the footnote under the report for “skipped” notes.
 
 ### Ideas always return the same concepts
 
@@ -652,6 +676,7 @@ Ensure nothing else is bound to the Cortex port, then relaunch. Use **View → T
 - [x] In-app terminals for Hermes, Claude Code, Codex, Grok, Antigravity  
 - [x] MCP TypeScript client with permissions, isolation, timeouts, audit  
 - [x] Embedded LanceDB index of the vault and research history  
+- [x] Quick Research (GPT Researcher) and Deep Report (GPT Researcher + PaperQA2)  
 - [ ] SSE / WebSocket activity stream (replace polling)  
 - [ ] In-app API key management for packaged desktop  
 - [ ] Trigger graphify builds from inside Cortex (today the semantic layer is only as fresh as the last external build)  
@@ -720,6 +745,8 @@ SPDX-License-Identifier: GPL-3.0-only
 - Agent ecosystem: Hermes, Claude Code, Codex, Grok / xAI, Antigravity, LM Studio  
 - [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)  
 - [LanceDB](https://github.com/lancedb/lancedb)  
+- [GPT Researcher](https://github.com/assafelovic/gpt-researcher)  
+- [PaperQA2](https://github.com/Future-House/paper-qa)  
 - Built with Next.js, React, Electron, and Tailwind CSS  
 
 ---

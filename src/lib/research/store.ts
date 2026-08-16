@@ -44,6 +44,7 @@ export function listReports(): ResearchHistoryEntry[] {
     researchedAt: r.researchedAt,
     resultCount: r.results.length,
     counts: r.counts,
+    mode: r.mode,
   }));
 }
 

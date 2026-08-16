@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ModeBadge } from "@/components/research/ReportBody";
 import { Button } from "@/components/ui/Button";
 import { formatRelative } from "@/lib/utils";
 import type { ResearchHistoryEntry } from "@/lib/research/types";
@@ -35,7 +36,7 @@ export default function ResearchHistoryPage() {
     <>
       <PageHeader
         title="Research history"
-        description="Topics you have already deep-researched"
+        description="Quick Research and Deep Report topics you have already run"
         actions={
           <Link href="/research-center">
             <Button type="button" variant="secondary" size="sm">
@@ -62,7 +63,12 @@ export default function ResearchHistoryPage() {
                   href={`/research-center/history/${entry.id}`}
                   className="min-w-0 flex-1"
                 >
-                  <div className="truncate text-sm font-medium">{entry.topic}</div>
+                  <div className="flex items-center gap-2">
+                    <ModeBadge mode={entry.mode} />
+                    <span className="truncate text-sm font-medium">
+                      {entry.topic}
+                    </span>
+                  </div>
                   <div className="mt-0.5 text-[11px] text-muted">
                     {entry.resultCount} sources · {entry.counts.website} web ·{" "}
                     {entry.counts.youtube} YouTube · {entry.counts.github} GitHub
