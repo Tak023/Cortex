@@ -100,7 +100,7 @@ export function ProviderUsageCards({ className }: { className?: string }) {
             Provider credits
           </h2>
           <p className="text-[11px] text-muted">
-            Claude · Grok · Hermes — tokens & spend this month
+            Claude Code · Grok · Hermes — tokens & spend this month
             {fetchedAt ? (
               <span className="text-muted/70">
                 {" "}
@@ -134,7 +134,11 @@ export function ProviderUsageCards({ className }: { className?: string }) {
               (id): ProviderCard => ({
                 id,
                 label:
-                  id === "claude" ? "Claude" : id === "grok" ? "Grok" : "Hermes",
+                  id === "claude"
+                    ? "Claude Code"
+                    : id === "grok"
+                      ? "Grok"
+                      : "Hermes",
                 creditsAvailableLabel: "—",
                 spentThisMonthLabel: "—",
                 tokensThisMonthLabel: "—",

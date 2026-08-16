@@ -8,6 +8,7 @@ import {
 } from "@/lib/mcp/catalog";
 import { buildMcpClientConfig, mcpToolsPromptSummary } from "@/lib/mcp/export";
 import type { McpServerState } from "@/lib/mcp/types";
+import { listIsolatedSessions } from "@/lib/mcp/client";
 import { getSettings, mergeMcpStates, updateSettings } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -73,13 +74,31 @@ export async function GET() {
             installFound: true,
           }
         : {}),
+      ...(def.id === "lancedb"
+        ? {
+            installPath: "embedded @lancedb/lancedb",
+            installFound: true,
+          }
+        : {}),
     };
   });
 
   return NextResponse.json({
     servers,
+    runtime: {
+      id: "mcp-typescript-sdk",
+      name: "MCP TypeScript SDK",
+      version: "1.30.0",
+      homepage: "https://github.com/modelcontextprotocol/typescript-sdk",
+      description:
+        "Official Model Context Protocol client — isolated stdio processes, per-agent tool permissions, timeouts, and audit history.",
+      ready: true,
+      sessions: listIsolatedSessions(),
+    },
     exportConfig: buildMcpClientConfig(states),
     promptSummary: mcpToolsPromptSummary(states),
+    timeouts: getSettings().mcpTimeouts,
+    sessions: listIsolatedSessions(),
   });
 }
 

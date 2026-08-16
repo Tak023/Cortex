@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.7 |
+| **Version** | 0.2.8 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -117,6 +117,16 @@ Highlights since the initial 0.1.x release:
 - `json()` accepts a request timeout, so no fetch can leave the UI spinning forever
 - **Agent terminals open faster**: xterm and its addons load in parallel rather than sequentially, and the agent rail prefetches the terminal route on hover
 
+### Research Center, Antigravity, live credits (0.2.8)
+
+- **Research Center** (`/research-center`) — type or speak a topic, run **Deep research** across the live web, YouTube, and GitHub, and get the **top 50 sources** with links. History lives on disk (`research-history.json`) and in **Research Center → History**
+- **Antigravity** joins the AI Agents rail as an in-app terminal (`agy`), with the official Google Antigravity icon
+- **Agent terminals keep color** (TERM / COLORTERM / FORCE_COLOR) and can **Save to Second Brain** — session transcripts append to the vault daily note
+- **Hermes credits** match [Nous Portal billing](https://portal.nousresearch.com) (`credits_remaining` / monthly spend of the Plus plan). Do not add the prepaid wallet or monthly-cap auto-reload into that card
+- **Claude Code card** on Command Center uses the same OAuth login as the `claude` CLI (Keychain + `~/.claude/.credentials.json`), not Console prepaid. Max / Pro session remaining, extra-usage dollars, and a link to [claude.ai/settings/usage](https://claude.ai/settings/usage)
+- **Official MCP TypeScript client** ([`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)) — isolated stdio process per agent×server, per-agent tool permissions, connect/call/idle timeouts, and an audit log on `/mcp`
+- **LanceDB** ([`@lancedb/lancedb`](https://github.com/lancedb/lancedb)) — embedded full-text index of the second brain and research history. Listed on MCP Servers; **Rebuild index** on the card; vault search merges LanceDB hits
+
 ---
 
 ## Features
@@ -127,14 +137,21 @@ Highlights since the initial 0.1.x release:
 - Capabilities, current task, metrics (tokens, latency, success rate)
 - Quick actions: start / stop / restart
 - Configuration panel: system prompts, model overrides, enable/disable, tool access
-- Launch external CLI agents (Hermes, Claude Code, Codex, Grok) and drive them from embedded in-app terminals
+- Launch external CLI agents (Hermes, Claude Code, Codex, Grok, **Antigravity**) and drive them from embedded in-app terminals
+- Save a terminal transcript to the second-brain **daily note**
 
 ### Jarvis & live data
 - Voice/chat assistant with grounded live answers (RivalSearch-first search, weather, free RSS/DDG fallbacks)
 - AI/tech news panel ranked for Anthropic, Claude Code, Grok, Codex, ChatGPT, and Hermes
 - Trending GitHub tab: top-20 new repos of the last 14 days by stars
-- MCP server catalog with config export
+- MCP server catalog with config export, isolated TypeScript client, per-agent permissions, timeouts, and audit history
+- Embedded **LanceDB** full-text index of the vault + research history
 - Speech-to-text input (Whisper-compatible backend)
+
+### Research Center
+- Voice or text topic input and **Deep research** across web, YouTube, and GitHub
+- Top **50** live sources with classified links (web / YouTube / GitHub)
+- Local history of researched topics (reopen or delete)
 
 ### Second brain (Obsidian vault)
 - Local Markdown vault as **shared agent memory** — keyword search over notes, grounded Jarvis answers, research seeded from prior knowledge
@@ -177,6 +194,7 @@ Highlights since the initial 0.1.x release:
 | **Claude Code** | Cloud | Architecture, implementation, polish |
 | **Codex** | Cloud | Implementation, testing |
 | **Grok** (SpaceXAI / xAI) | Cloud | Brainstorm, planning, critique |
+| **Antigravity** | Cloud | In-app `agy` terminal |
 | **LM Studio · Qwen** | Local | Offline coding |
 | **LM Studio · Llama** | Local | Local analysis / secondary critique |
 
@@ -250,7 +268,8 @@ Each phase picks an agent using:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  UI  ·  Next.js App Router + React 19 + Tailwind                │
-│  Command · Agents · Ideas · Projects · Orchestration · Settings │
+│  Command · Jarvis · Graphify · Agents · Ideas · Projects        │
+│  Orchestration · MCP · Research Center · Settings               │
 └────────────────────────────┬────────────────────────────────────┘
                              │  Route Handlers (HTTP API)
 ┌────────────────────────────▼─────────────────────────────────┐
@@ -266,8 +285,9 @@ Each phase picks an agent using:
 │  (data/state.json)        │ │  · Markdown notes on disk      │
 │  Desktop: OS userData     │ │  · Search → grounding/research │
 │  Dev/web: ./data          │ │  · Writes: projects/, log.md   │
-└───────────────────────────┘ │  · Graph: graphify | wikilinks │
-                              └────────────────────────────────┘
+│  LanceDB · FTS index      │ │  · Graph: graphify | wikilinks │
+│  MCP audit / research     │ └────────────────────────────────┘
+└───────────────────────────┘
 
 Desktop shell (Electron)
   · Main process starts Next standalone server on 127.0.0.1
@@ -286,7 +306,8 @@ Desktop shell (Electron)
 | API | Next.js Route Handlers |
 | Orchestration | In-process TypeScript engine |
 | AI (optional) | OpenAI-compatible client → **xAI / SpaceXAI** (`https://api.x.ai/v1`, model `grok-4.5`) |
-| Storage | Local JSON file store (no PostgreSQL/SQLite required for MVP) |
+| Storage | Local JSON file store + embedded **LanceDB** full-text index |
+| MCP | Official TypeScript SDK client (`@modelcontextprotocol/sdk`) |
 | Desktop | Electron 37, electron-builder (DMG / ZIP, macOS arm64) |
 | Packaging | Next `output: "standalone"` + post-pack `node_modules` injection |
 
@@ -343,7 +364,7 @@ Concept generation works offline by default. To use live Grok, set `XAI_API_KEY`
 ### Clone & install
 
 ```bash
-git clone https://github.com/<your-org>/Cortex.git
+git clone https://github.com/Tak023/Cortex.git
 cd Cortex
 npm install
 cp .env.example .env.local   # optional
@@ -411,10 +432,13 @@ XAI_API_KEY=
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `XAI_API_KEY` | No | Live Grok concepts via xAI API |
+| `XAI_MANAGEMENT_KEY` / `XAI_TEAM_ID` | No | Live Grok credits on Command Center |
 | `JARVIS_GROK_MODEL` / `XAI_CHAT_MODEL` | No | Override Grok chat model (default `grok-4.5`) |
-| `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | No | Raises GitHub API rate limits for the trending-repos tab |
-| `WHISPER_API_KEY` / `WHISPER_BASE_URL` / `WHISPER_MODEL` | No | Speech-to-text backend for Jarvis voice input |
-| `TAVILY_API_KEY` | No | Optional search fallback for live answers |
+| `ANTHROPIC_ADMIN_KEY` / `ANTHROPIC_ORG_ID` | No | Optional Claude Admin usage/token reports |
+| `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | No | Raises GitHub API rate limits for GitHub search and the trending-repos tab |
+| `WHISPER_API_KEY` / `WHISPER_BASE_URL` / `WHISPER_MODEL` | No | Speech-to-text backend for Jarvis / Research voice input |
+| `TAVILY_API_KEY` | No | Optional search fallback for live answers and Research |
+| `FIRECRAWL_API_KEY` | No | Firecrawl MCP scrape/crawl |
 | `CORTEX_VAULT_DIR` | No | Path to the Obsidian second brain (supports `~`, default `~/Documents/hermes-second-brain`); overrides the Settings value |
 | `CORTEX_DATA_DIR` | No | Override state directory (set automatically by desktop) |
 | `CORTEX_PORT` | No | Packaged server port (default `47832`) |
@@ -448,17 +472,19 @@ XAI_API_KEY=
 
 | Route | Purpose |
 |-------|---------|
-| `/` | Command Center — metrics, live projects, activity |
+| `/` | Command Center — provider credits, metrics, live projects, activity |
 | `/jarvis` | Jarvis — voice/chat assistant, live data, news + GitHub trending |
 | `/graphify` | Second-brain graph — concepts, communities, rationale, god nodes |
 | `/agents` | Agent fleet, search, filters, controls |
 | `/agents/terminal` | Embedded terminals for launched CLI agents |
-| `/mcp` | MCP server catalog + config export |
+| `/mcp` | MCP catalog, TypeScript client, permissions, LanceDB, audit |
+| `/research-center` | Deep research — voice/text topic, top 50 live sources |
+| `/research-center/history` | Past research topics |
 | `/ideas` | Idea capture, templates, concept generation |
 | `/projects` | Project list |
 | `/projects/[id]` | Workspace: Kanban, memory, artifacts, chat |
 | `/orchestration` | Live “who is working on what” |
-| `/settings` | Orchestration prefs + agent config |
+| `/settings` | Orchestration prefs + agent config + vault |
 
 ---
 
@@ -477,10 +503,14 @@ Cortex/
 │   ├── app/                   # Pages + API routes
 │   ├── components/            # UI (layout, agents, ideas, projects, vault, …)
 │   └── lib/
-│       ├── agents/            # Registry + router
+│       ├── agents/            # Registry + router + terminals
 │       ├── orchestration/     # Pipeline + engine
 │       ├── ai/                # Grok client + phase synthesis
+│       ├── mcp/               # Catalog, isolated SDK client, permissions, audit
+│       ├── lancedb/           # Embedded LanceDB index
+│       ├── research/          # Deep research (web / YouTube / GitHub)
 │       ├── vault/             # Second brain: search/write + graph layers
+│       ├── providers/         # Command Center credit cards
 │       ├── store.ts           # Local persistence
 │       └── types.ts           # Domain types
 ├── data/                      # Dev state (gitignored)
@@ -503,7 +533,7 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 | `POST` | `/api/agents/invoke` | Invoke an agent adapter directly |
 | `GET/POST` | `/api/agents/launch` | List launchable CLI agents / launch one |
 | `GET/POST` | `/api/agents/terminal` | List / create embedded terminal sessions |
-| `GET/POST` | `/api/agents/terminal/:id/…` | Terminal stream (SSE), input, resize |
+| `GET/POST` | `/api/agents/terminal/:id/…` | Terminal stream (SSE), input, resize, save-to-vault |
 | `GET/POST` | `/api/ideas` | List / create ideas |
 | `POST` | `/api/ideas/generate` | Generate concepts |
 | `GET/POST` | `/api/projects` | List / create project from concept |
@@ -511,15 +541,24 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 | `POST` | `/api/projects/:id/action` | `approve` · `reject` · `pause` · `resume` · `reassign` |
 | `GET` | `/api/activity` | Activity feed |
 | `GET` | `/api/metrics` | Fleet metrics + usage |
+| `GET` | `/api/providers/usage` | Command Center Claude Code / Grok / Hermes credits |
 | `GET` | `/api/templates` | App templates |
 | `GET/PATCH` | `/api/settings` | App settings |
 | `GET` | `/api/export/:id` | Export project JSON |
 | `GET` | `/api/news` | Ranked AI/tech news + trending GitHub repos |
-| `GET/PATCH` | `/api/mcp` | MCP server catalog |
+| `GET/PATCH` | `/api/mcp` | MCP catalog + TypeScript SDK runtime |
 | `GET` | `/api/mcp/export` | Export MCP client config |
+| `GET/PATCH` | `/api/mcp/permissions` | Per-agent tool allow/deny lists + timeouts |
+| `GET` | `/api/mcp/tools` | List tools on a live (or embedded) MCP server |
+| `POST` | `/api/mcp/call` | Isolated tool call (permissions + audit) |
+| `GET/DELETE` | `/api/mcp/audit` | MCP audit history |
+| `GET/POST` | `/api/lancedb` | LanceDB status; `reindex` / `search` |
+| `POST` | `/api/research` | Deep research a topic (top 50 sources) |
+| `GET` | `/api/research/history` | List saved research topics |
+| `GET/DELETE` | `/api/research/history/:id` | Load or delete a research report |
 | `GET/POST` | `/api/integrations/jarvis` | Jarvis live-data integration |
 | `GET/POST` | `/api/speech/transcribe` | Speech-to-text (Whisper-compatible) |
-| `GET` | `/api/vault` | Second-brain status; keyword search with `?q=` |
+| `GET` | `/api/vault` | Second-brain status; search with `?q=` (keyword + LanceDB) |
 | `GET` | `/api/vault/graph` | Knowledge graph; `?source=wikilinks` forces the live layer |
 
 ---
@@ -532,6 +571,8 @@ All routes are local HTTP handlers (same process as the UI in web mode; loopback
 - Without a key, concept generation stays **fully local**.  
 - Desktop app listens on **localhost only**.  
 - The **second brain** is read from and written to entirely on disk — no vault content is uploaded. Note snippets do enter prompts sent to a cloud model when you use Jarvis or the pipeline with a cloud agent configured; disable the vault in Settings to prevent that.  
+- **LanceDB** lives under the Cortex data directory (`…/data/lancedb`). It is local-only.  
+- **MCP audit** (`mcp-audit.json`) redacts secret-looking argument keys.  
 - Vault writes are limited to `projects/` and `log.md`; `raw/` is refused as read-only and paths outside the vault are rejected.
 
 ---
@@ -563,6 +604,10 @@ Fixed in **0.2.1** — the Cortex server used to leak Next standalone internals 
 ```bash
 env -u __NEXT_PRIVATE_STANDALONE_CONFIG -u NODE_ENV -u PORT -u HOSTNAME npx next build
 ```
+
+### Claude Code credits show “—” or old Console dollars
+
+The Command Center **Claude Code** card reads the `claude` CLI login (macOS Keychain + `~/.claude/.credentials.json`), not platform.claude.com prepaid. Run `claude /login` if the card cannot refresh. Extra usage off on Max/Pro shows remaining **session %**, not a dollar balance.
 
 ### Ideas always return the same concepts
 
@@ -604,11 +649,13 @@ Ensure nothing else is bound to the Cortex port, then relaunch. Use **View → T
 
 ## Roadmap
 
-- [ ] Real CLI / API adapters: Hermes, Claude Code, Codex, LM Studio  
+- [x] In-app terminals for Hermes, Claude Code, Codex, Grok, Antigravity  
+- [x] MCP TypeScript client with permissions, isolation, timeouts, audit  
+- [x] Embedded LanceDB index of the vault and research history  
 - [ ] SSE / WebSocket activity stream (replace polling)  
 - [ ] In-app API key management for packaged desktop  
 - [ ] Trigger graphify builds from inside Cortex (today the semantic layer is only as fresh as the last external build)  
-- [ ] SQLite / libSQL for larger workspaces  
+- [ ] Vector embeddings in LanceDB (today is full-text; vectors are next)  
 - [ ] Parallel workstreams within a phase  
 - [ ] Code signing + notarization for macOS distribution  
 - [ ] Windows / Linux desktop targets  
@@ -670,7 +717,9 @@ SPDX-License-Identifier: GPL-3.0-only
 
 ## Acknowledgments
 
-- Agent ecosystem: Hermes, Claude Code, Codex, Grok / xAI, LM Studio  
+- Agent ecosystem: Hermes, Claude Code, Codex, Grok / xAI, Antigravity, LM Studio  
+- [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)  
+- [LanceDB](https://github.com/lancedb/lancedb)  
 - Built with Next.js, React, Electron, and Tailwind CSS  
 
 ---

@@ -5,7 +5,7 @@ import { saveReport } from "./store";
 import type { ResearchReport, ResearchResult } from "./types";
 
 export const MAX_TOPIC_LENGTH = 400;
-export const RESULT_LIMIT = 20;
+export const RESULT_LIMIT = 50;
 
 export async function runDeepResearch(topicRaw: string): Promise<ResearchReport> {
   const topic = topicRaw.trim().replace(/\s+/g, " ").slice(0, MAX_TOPIC_LENGTH);

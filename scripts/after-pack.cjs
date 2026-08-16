@@ -113,6 +113,65 @@ exports.default = async function afterPack(context) {
   }
   console.log("afterPack: next module present ✓");
 
+  // Next NFT often keeps only the ESM half of the MCP SDK (and drops its
+  // runtime deps like cross-spawn). Copy the full package tree from the
+  // project install so isolated stdio clients work in the packaged app.
+  const projectModules = path.join(projectDir, "node_modules");
+  function copyPkg(name) {
+    const src = path.join(projectModules, name);
+    const dest = path.join(destModules, name);
+    if (!fs.existsSync(src)) return;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+    copyDir(src, dest);
+  }
+  function readDeps(pkgDir) {
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"),
+      );
+      return Object.keys({
+        ...(pkg.dependencies || {}),
+        ...(pkg.optionalDependencies || {}),
+      });
+    } catch {
+      return [];
+    }
+  }
+  function walkNested(dir, visit) {
+    if (!fs.existsSync(dir)) return;
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith(".")) continue;
+      const full = path.join(dir, name);
+      if (name.startsWith("@")) {
+        if (!fs.existsSync(full)) continue;
+        for (const scoped of fs.readdirSync(full)) {
+          visit(path.join(full, scoped));
+        }
+      } else {
+        visit(full);
+      }
+    }
+  }
+  function copyPkgTree(name, seen = new Set()) {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const src = path.join(projectModules, name);
+    if (!fs.existsSync(src)) return;
+    copyPkg(name);
+    for (const dep of readDeps(src)) copyPkgTree(dep, seen);
+    walkNested(path.join(src, "node_modules"), (nested) => {
+      for (const dep of readDeps(nested)) copyPkgTree(dep, seen);
+    });
+  }
+  console.log("afterPack: installing full @modelcontextprotocol/sdk + deps…");
+  copyPkgTree("@modelcontextprotocol/sdk");
+  console.log("afterPack: MCP SDK present ✓");
+  console.log("afterPack: installing @lancedb/lancedb + native bindings…");
+  copyPkgTree("@lancedb/lancedb");
+  copyPkgTree("apache-arrow");
+  console.log("afterPack: LanceDB present ✓");
+
   // Next standalone NFT often strips node-pty prebuilds. Force a full copy from
   // the project install (includes prebuilds + spawn-helper) for Electron PTY.
   const fullPty = path.join(projectDir, "node_modules", "node-pty");

@@ -78,7 +78,7 @@ export default function ResearchPage() {
     <>
       <PageHeader
         title="Research"
-        description="Type or speak a topic — Cortex deep-researches the web, YouTube, and GitHub and lists the top 20 sources"
+        description="Type or speak a topic — Cortex deep-researches the web, YouTube, and GitHub and lists the top 50 sources"
         actions={
           <Link href="/research-center/history">
             <Button type="button" variant="secondary" size="sm">

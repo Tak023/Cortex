@@ -565,6 +565,309 @@ async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
   };
 }
 
+const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+
+type ClaudeCodeLive = {
+  ok: boolean;
+  plan: string;
+  remainingPct: number | null;
+  extraCreditsUsd: number | null;
+  extraUsedUsd: number | null;
+  fiveHourUtil: number | null;
+  detail?: string;
+};
+
+function claudeCredentialsPath(): string {
+  return path.join(os.homedir(), ".claude", ".credentials.json");
+}
+
+function parseClaudeOauthBlob(raw: string): {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+} | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      claudeAiOauth?: {
+        accessToken?: string;
+        refreshToken?: string;
+        expiresAt?: number;
+      };
+      accessToken?: string;
+      refreshToken?: string;
+      expiresAt?: number;
+    };
+    const o = parsed.claudeAiOauth || parsed;
+    if (!o.accessToken || !o.refreshToken) return null;
+    return {
+      accessToken: o.accessToken,
+      refreshToken: o.refreshToken,
+      expiresAt: Number(o.expiresAt) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readClaudeOauthFromKeychain(): string | null {
+  try {
+    return execFileSync(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { encoding: "utf8", timeout: 4000 },
+    ).trim();
+  } catch {
+    return null;
+  }
+}
+
+function readClaudeOauth(): {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+} | null {
+  const fromKeychain = readClaudeOauthFromKeychain();
+  if (fromKeychain) {
+    const parsed = parseClaudeOauthBlob(fromKeychain);
+    if (parsed) return parsed;
+  }
+  try {
+    return parseClaudeOauthBlob(fs.readFileSync(claudeCredentialsPath(), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeClaudeOauth(next: {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}) {
+  const p = claudeCredentialsPath();
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>;
+  } catch {
+    existing = {};
+  }
+  existing.claudeAiOauth = {
+    ...((existing.claudeAiOauth as object) || {}),
+    accessToken: next.accessToken,
+    refreshToken: next.refreshToken,
+    expiresAt: next.expiresAt,
+  };
+  fs.writeFileSync(p, JSON.stringify(existing, null, 2), { mode: 0o600 });
+  try {
+    const blob = JSON.stringify({ claudeAiOauth: existing.claudeAiOauth });
+    execFileSync(
+      "security",
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        os.userInfo().username,
+        "-w",
+        blob,
+      ],
+      { timeout: 4000 },
+    );
+  } catch {
+    /* keychain update is best-effort */
+  }
+}
+
+async function refreshClaudeOauth(refreshToken: string): Promise<{
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+} | null> {
+  try {
+    const res = await fetch(CLAUDE_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "claude-cli/2.1.233",
+      },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: CLAUDE_OAUTH_CLIENT_ID,
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    if (!json.access_token) return null;
+    const expiresAt = Date.now() + Math.max(60, json.expires_in || 28_800) * 1000;
+    const next = {
+      accessToken: json.access_token,
+      refreshToken: json.refresh_token || refreshToken,
+      expiresAt,
+    };
+    try {
+      writeClaudeOauth(next);
+    } catch {
+      /* still usable this process */
+    }
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Live Claude Code / claude.ai Max-Pro usage via the same OAuth tokens
+ * the `claude` CLI stores in ~/.claude/.credentials.json.
+ */
+async function fetchClaudeCodeUsage(): Promise<ClaudeCodeLive> {
+  let creds = readClaudeOauth();
+  if (!creds) {
+    return {
+      ok: false,
+      plan: "",
+      remainingPct: null,
+      extraCreditsUsd: null,
+      extraUsedUsd: null,
+      fiveHourUtil: null,
+      detail: "Claude Code is not logged in (`claude /login`)",
+    };
+  }
+  if (creds.expiresAt && creds.expiresAt < Date.now() + 60_000) {
+    creds = (await refreshClaudeOauth(creds.refreshToken)) || creds;
+  }
+
+  const headers = {
+    Authorization: `Bearer ${creds.accessToken}`,
+    Accept: "application/json",
+    "anthropic-beta": "oauth-2025-04-20",
+    "User-Agent": "claude-cli/2.1.233",
+  };
+
+  const oauthGet = async (url: string): Promise<Response> => {
+    let res = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+      cache: "no-store",
+    });
+    if (res.status === 401) {
+      const refreshed = await refreshClaudeOauth(creds!.refreshToken);
+      if (!refreshed) return res;
+      creds = refreshed;
+      res = await fetch(url, {
+        headers: { ...headers, Authorization: `Bearer ${refreshed.accessToken}` },
+        signal: AbortSignal.timeout(12_000),
+        cache: "no-store",
+      });
+    }
+    return res;
+  };
+
+  try {
+    const [profileRes, usageRes] = await Promise.all([
+      oauthGet("https://api.anthropic.com/api/oauth/profile"),
+      oauthGet("https://api.anthropic.com/api/oauth/usage"),
+    ]);
+    if (!profileRes.ok && !usageRes.ok) {
+      return {
+        ok: false,
+        plan: "",
+        remainingPct: null,
+        extraCreditsUsd: null,
+        extraUsedUsd: null,
+        fiveHourUtil: null,
+        detail: `Claude Code OAuth ${profileRes.status}/${usageRes.status} — run \`claude /login\``,
+      };
+    }
+
+    const profile = profileRes.ok
+      ? ((await profileRes.json()) as {
+          organization?: {
+            organization_type?: string;
+            rate_limit_tier?: string;
+            has_extra_usage_enabled?: boolean;
+            subscription_status?: string;
+          };
+          account?: { has_claude_max?: boolean; has_claude_pro?: boolean };
+        })
+      : {};
+    const usage = usageRes.ok
+      ? ((await usageRes.json()) as {
+          five_hour?: { utilization?: number | null };
+          extra_usage?: {
+            is_enabled?: boolean;
+            monthly_limit?: number | null;
+            used_credits?: number | null;
+          };
+          spend?: {
+            used?: { amount_minor?: number; exponent?: number };
+          };
+        })
+      : {};
+
+    const org = profile.organization || {};
+    const tier = org.rate_limit_tier || "";
+    const plan = tier.includes("max_20")
+      ? "Max 20x"
+      : tier.includes("max_5")
+        ? "Max 5x"
+        : org.organization_type === "claude_max" || profile.account?.has_claude_max
+          ? "Max"
+          : profile.account?.has_claude_pro
+            ? "Pro"
+            : org.organization_type || "Claude Code";
+
+    const util = usage.five_hour?.utilization;
+    const remainingPct =
+      typeof util === "number" && Number.isFinite(util)
+        ? Math.max(0, Math.min(100, (1 - util) * 100))
+        : null;
+
+    const extra = usage.extra_usage;
+    let extraCreditsUsd: number | null = null;
+    let extraUsedUsd: number | null = null;
+    if (extra?.is_enabled && extra.monthly_limit != null) {
+      extraUsedUsd = Number(extra.used_credits) || 0;
+      extraCreditsUsd = Math.max(0, Number(extra.monthly_limit) - extraUsedUsd);
+    } else if (usage.spend?.used?.amount_minor != null) {
+      extraUsedUsd =
+        usage.spend.used.amount_minor / 10 ** (usage.spend.used.exponent ?? 2);
+    }
+
+    const utilPct =
+      typeof util === "number" ? `${Math.round(util * 100)}%` : "—";
+    const extraBit = extra?.is_enabled
+      ? `extra usage ${formatUsd(extraCreditsUsd)} left`
+      : "extra usage off";
+
+    return {
+      ok: true,
+      plan,
+      remainingPct,
+      extraCreditsUsd,
+      extraUsedUsd,
+      fiveHourUtil: typeof util === "number" ? util : null,
+      detail: `Claude ${plan} · 5-hour window ${utilPct} used · ${extraBit}`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      plan: "",
+      remainingPct: null,
+      extraCreditsUsd: null,
+      extraUsedUsd: null,
+      fiveHourUtil: null,
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
 function creditsFromEnv(provider: ProviderId): number | null {
   const map: Record<ProviderId, string[]> = {
     claude: ["CLAUDE_CREDITS_AVAILABLE", "ANTHROPIC_CREDITS_AVAILABLE"],
@@ -1523,10 +1826,11 @@ async function fetchNousMonth(): Promise<NousMonth> {
 export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
   ensureSecretsLoaded();
 
-  const [anthropic, xai, nous] = await Promise.all([
+  const [anthropic, xai, nous, claudeCode] = await Promise.all([
     fetchAnthropicMonth(),
     fetchXaiMonth(),
     fetchNousMonth(),
+    fetchClaudeCodeUsage(),
   ]);
 
   const claudeLocal = localMonthUsage("claude");
@@ -1538,7 +1842,8 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
       process.env.ANTHROPIC_ADMIN_KEY?.trim() ||
       process.env.ANTHROPIC_ADMIN_API_KEY?.trim() ||
       process.env.CLAUDE_SESSION_KEY?.trim() ||
-      loadClaudeConsoleAuth(),
+      loadClaudeConsoleAuth() ||
+      readClaudeOauth(),
   );
   const grokConfigured = Boolean(
     process.env.XAI_API_KEY?.trim() ||
@@ -1561,19 +1866,28 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
       ? anthropic.tokens
       : claudeLocal.tokens;
   const claudeSpend =
-    anthropic.ok && anthropic.costUsd > 0
-      ? anthropic.costUsd
-      : claudeUseLocalFallback
-        ? claudeLocal.costUsd
-        : anthropic.ok
-          ? anthropic.costUsd
-          : claudeLocal.costUsd;
+    claudeCode.ok && claudeCode.extraUsedUsd != null
+      ? claudeCode.extraUsedUsd
+      : anthropic.ok && anthropic.costUsd > 0
+        ? anthropic.costUsd
+        : claudeUseLocalFallback
+          ? claudeLocal.costUsd
+          : anthropic.ok
+            ? anthropic.costUsd
+            : claudeLocal.costUsd;
 
-  // Live Console prepaid credits first; env only if session unavailable
+  // Claude Code Max/Pro remaining session % / extra-usage $ first.
+  // Console prepaid is a different org (API) and is only a fallback.
   const claudeCredits =
-    anthropic.creditsAvailable != null
-      ? anthropic.creditsAvailable
-      : creditsFromEnv("claude");
+    claudeCode.ok && claudeCode.extraCreditsUsd != null
+      ? claudeCode.extraCreditsUsd
+      : anthropic.creditsAvailable != null
+        ? anthropic.creditsAvailable
+        : creditsFromEnv("claude");
+  const claudeCreditsLabel =
+    claudeCode.ok && claudeCode.extraCreditsUsd == null && claudeCode.remainingPct != null
+      ? `${Math.round(claudeCode.remainingPct)}% left`
+      : formatUsd(claudeCredits);
 
   const grokCredits =
     xai.ok && xai.creditsAvailable != null
@@ -1613,31 +1927,35 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
   const cards: ProviderUsageCard[] = [
     {
       id: "claude",
-      label: "Claude",
+      label: "Claude Code",
       creditsAvailable: claudeCredits,
-      creditsAvailableLabel: formatUsd(claudeCredits),
+      creditsAvailableLabel: claudeCreditsLabel,
       spentThisMonth: claudeSpend,
       spentThisMonthLabel: formatUsd(claudeSpend),
       tokensThisMonth: claudeTokens,
       tokensThisMonthLabel: formatTokens(claudeTokens),
-      source: claudeUseLocalFallback
-        ? "mixed"
-        : anthropic.consoleLive
-          ? anthropic.tokens > 0
-            ? "mixed"
-            : "claude-console"
+      source: claudeCode.ok
+        ? "claude-console"
+        : claudeUseLocalFallback
+          ? "mixed"
+          : anthropic.consoleLive
+            ? anthropic.tokens > 0
+              ? "mixed"
+              : "claude-console"
+            : anthropic.ok
+              ? "anthropic-admin"
+              : "local",
+      detail: claudeCode.ok
+        ? claudeCode.detail
+        : claudeUseLocalFallback
+          ? `${anthropic.detail || "Admin org has $0 this month."} Showing Cortex local Claude agents (${formatTokens(claudeLocal.tokens)}, ${formatUsd(claudeLocal.costUsd)} est.).`
           : anthropic.ok
-            ? "anthropic-admin"
-            : "local",
-      detail: claudeUseLocalFallback
-        ? `${anthropic.detail || "Admin org has $0 this month."} Showing Cortex local Claude agents (${formatTokens(claudeLocal.tokens)}, ${formatUsd(claudeLocal.costUsd)} est.).`
-        : anthropic.ok
-          ? anthropic.detail ||
-            "Live from Claude Console dashboard + Admin Usage API"
-          : anthropic.detail ||
-            "Local Cortex usage. Log into platform.claude.com (Firefox) and set ANTHROPIC_ADMIN_KEY.",
-      consoleUrl: "https://platform.claude.com/dashboard",
-      configured: claudeConfigured,
+            ? anthropic.detail ||
+              "Live from Claude Console dashboard + Admin Usage API"
+            : anthropic.detail ||
+              "Local Cortex usage. Run `claude /login` for live Claude Code credits.",
+      consoleUrl: "https://claude.ai/settings/usage",
+      configured: claudeConfigured || claudeCode.ok,
     },
     {
       id: "grok",

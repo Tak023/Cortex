@@ -23,6 +23,8 @@ const nextConfig: NextConfig = {
     "onnxruntime-common",
     "sharp",
     "node-pty",
+    "@modelcontextprotocol/sdk",
+    "@lancedb/lancedb",
   ],
 };
 

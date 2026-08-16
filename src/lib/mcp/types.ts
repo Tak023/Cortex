@@ -11,7 +11,8 @@ export type McpServerId =
   | "tavily"
   | "github"
   | "rival-search"
-  | "heventure-search";
+  | "heventure-search"
+  | "lancedb";
 
 export interface McpEnvVar {
   key: string;
@@ -51,6 +52,56 @@ export interface McpServerState {
   /** Non-secret overrides (host, paths). Secrets stay in process env. */
   envOverrides?: Record<string, string>;
 }
+
+/** How an agent may use tools on one MCP server. */
+export type McpToolPolicyMode = "all" | "allow" | "deny" | "off";
+
+export type McpToolPolicy = {
+  /** all = every tool; allow = only listed; deny = all except listed; off = blocked */
+  mode: McpToolPolicyMode;
+  tools: string[];
+};
+
+export type McpAgentPermissions = {
+  agentId: string;
+  servers: Partial<Record<McpServerId, McpToolPolicy>>;
+};
+
+export type McpTimeouts = {
+  /** Handshake / spawn timeout */
+  connectMs: number;
+  /** Per tool-call timeout */
+  callMs: number;
+  /** Kill an idle isolated process after this many ms */
+  idleMs: number;
+};
+
+export const DEFAULT_MCP_TIMEOUTS: McpTimeouts = {
+  connectMs: 20_000,
+  callMs: 30_000,
+  idleMs: 120_000,
+};
+
+export type McpAuditStatus =
+  | "ok"
+  | "denied"
+  | "timeout"
+  | "error"
+  | "listed";
+
+export type McpAuditEntry = {
+  id: string;
+  at: string;
+  agentId: string;
+  serverId: string;
+  tool: string;
+  argsPreview: string;
+  resultPreview: string;
+  durationMs: number;
+  status: McpAuditStatus;
+  pid?: number | null;
+  error?: string;
+};
 
 export interface McpExportFormat {
   /** Claude Desktop / many clients */

@@ -300,6 +300,10 @@ export interface AppSettings {
    * API keys stay in process env; this only tracks which servers are on.
    */
   mcpServers: import("./mcp/types").McpServerState[];
+  /** Per-agent MCP tool allow/deny lists */
+  mcpPermissions: import("./mcp/types").McpAgentPermissions[];
+  /** Isolated stdio client timeouts */
+  mcpTimeouts: import("./mcp/types").McpTimeouts;
 }
 
 export interface AppState {

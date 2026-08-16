@@ -22,6 +22,7 @@ export function buildMcpClientConfig(states: McpServerState[]): {
   for (const def of MCP_CATALOG) {
     const state = states.find((s) => s.id === def.id);
     if (state && !state.enabled) continue;
+    if (def.id === "lancedb") continue; // embedded in Cortex, not a stdio export
 
     const launch = resolveMcpLaunch(def, state);
     const env: Record<string, string> = {};

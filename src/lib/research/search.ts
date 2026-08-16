@@ -125,7 +125,7 @@ async function searchTavily(query: string): Promise<RawHit[]> {
         api_key: key,
         query,
         search_depth: "advanced",
-        max_results: 10,
+        max_results: 20,
         include_answer: false,
       }),
       signal: AbortSignal.timeout(14_000),
@@ -154,7 +154,7 @@ async function searchDdgHtml(query: string): Promise<RawHit[]> {
     const out: Array<{ title: string; url: string; snippet: string }> = [];
     const re = /class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && out.length < 12) {
+    while ((m = re.exec(html)) && out.length < 25) {
       const href = decodeXml(m[1] || "");
       const title = decodeXml(m[2] || "");
       if (!title || !href) continue;
@@ -196,7 +196,7 @@ async function searchYoutube(topic: string): Promise<RawHit[]> {
     const out: RawHit[] = [];
     const re = /"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && out.length < 10) {
+    while ((m = re.exec(html)) && out.length < 25) {
       const id = m[1];
       if (seen.has(id)) continue;
       seen.add(id);
@@ -229,7 +229,7 @@ async function searchGithubRepos(topic: string): Promise<RawHit[]> {
     url.searchParams.set("q", topic);
     url.searchParams.set("sort", "stars");
     url.searchParams.set("order", "desc");
-    url.searchParams.set("per_page", "10");
+    url.searchParams.set("per_page", "25");
     const res = await fetch(url.toString(), {
       headers: {
         Accept: "application/vnd.github+json",
@@ -338,7 +338,7 @@ export async function gatherResearchHits(topic: string): Promise<{
   return { hits: merged, notes };
 }
 
-export function pickTopResults(hits: RawHit[], limit = 20): RawHit[] {
+export function pickTopResults(hits: RawHit[], limit = 50): RawHit[] {
   const byUrl = new Map<string, RawHit>();
   for (const hit of hits) {
     const key = hit.url.replace(/\/+$/, "").toLowerCase();
@@ -362,9 +362,9 @@ export function pickTopResults(hits: RawHit[], limit = 20): RawHit[] {
     }
   };
   // Guarantee a mix when sources exist, then fill by remaining score.
-  take("website", 8);
-  take("youtube", 6);
-  take("github", 6);
+  take("website", 20);
+  take("youtube", 15);
+  take("github", 15);
   const rest = [...buckets.website, ...buckets.youtube, ...buckets.github].sort(
     (a, b) => b.score - a.score,
   );

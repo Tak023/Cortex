@@ -11,7 +11,8 @@ import type {
 } from "./types";
 import { DEFAULT_AGENTS } from "./agents/registry";
 import { defaultMcpStates } from "./mcp/catalog";
-import type { McpServerState } from "./mcp/types";
+import { defaultMcpPermissions, mergeMcpPermissions } from "./mcp/permissions";
+import { DEFAULT_MCP_TIMEOUTS, type McpServerState } from "./mcp/types";
 import { ensureSecretsLoaded } from "./env/secrets";
 
 // Packaged Electron may not inject env before Next boots — load secrets first.
@@ -79,6 +80,8 @@ function defaultSettings(): AppSettings {
     jarvisTimeoutMs: 120_000,
     jarvisUseInPipeline: true,
     mcpServers: defaultMcpStates(),
+    mcpPermissions: defaultMcpPermissions(),
+    mcpTimeouts: { ...DEFAULT_MCP_TIMEOUTS },
   };
 }
 
@@ -157,6 +160,11 @@ function load(): AppState {
           parsed.settings?.jarvisChatMode || defaults.jarvisChatMode,
         ),
         mcpServers: mergeMcpStates(parsed.settings?.mcpServers),
+        mcpPermissions: mergeMcpPermissions(parsed.settings?.mcpPermissions),
+        mcpTimeouts: {
+          ...DEFAULT_MCP_TIMEOUTS,
+          ...(parsed.settings?.mcpTimeouts || {}),
+        },
       };
       memory = parsed;
       if (agentsAdded > 0 || agentsRemoved > 0) {

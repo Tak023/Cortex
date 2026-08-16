@@ -227,6 +227,18 @@ export const MCP_CATALOG: McpServerDefinition[] = [
     ],
     tags: ["github", "git", "code", "devops"],
   },
+  {
+    id: "lancedb",
+    name: "LanceDB",
+    description:
+      "Embedded vector / full-text database for the second brain and research history — local, no API key.",
+    homepage: "https://github.com/lancedb/lancedb",
+    transport: "stdio",
+    command: "cortex-embedded",
+    args: ["lancedb"],
+    envVars: [],
+    tags: ["vector", "search", "memory", "local", "fts"],
+  },
 ];
 
 export function defaultMcpStates(): McpServerState[] {
@@ -266,6 +278,11 @@ export function resolveMcpLaunch(
   if (def.id === "heventure-search" && !useDocker) {
     command = resolveUvxCommand();
     args = heventureSearchArgs();
+  }
+
+  if (def.id === "lancedb") {
+    command = "cortex-embedded";
+    args = ["lancedb"];
   }
 
   const env: Record<string, string> = {};

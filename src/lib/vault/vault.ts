@@ -99,6 +99,30 @@ export function isIndexedVaultEntry(name: string): boolean {
   return !name.startsWith(".") && !EXCLUDED_DIRS.has(name);
 }
 
+export function listVaultNoteDocuments(): Array<{
+  id: string;
+  path: string;
+  title: string;
+  text: string;
+}> {
+  if (!isVaultEnabled()) return [];
+  const dir = getVaultDir();
+  const out: Array<{ id: string; path: string; title: string; text: string }> =
+    [];
+  for (const abs of listNotes(dir)) {
+    const rel = path.relative(dir, abs);
+    const text = readNote(abs);
+    if (!text.trim()) continue;
+    out.push({
+      id: `vault:${rel}`,
+      path: rel,
+      title: path.basename(rel, ".md"),
+      text,
+    });
+  }
+  return out;
+}
+
 function listNotes(dir: string, depth = 0, out: string[] = []): string[] {
   if (depth > MAX_DEPTH || out.length >= MAX_NOTES) return out;
   let entries: fs.Dirent[];
