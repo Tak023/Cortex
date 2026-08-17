@@ -1,3 +1,7 @@
+import type { ResearchIntent } from "./query";
+
+export type { ResearchIntent };
+
 export type ResearchKind = "website" | "youtube" | "github";
 
 export type ResearchMode = "quick" | "deep";
@@ -10,6 +14,8 @@ export type ResearchResult = {
   snippet: string;
   source?: string;
   extra?: string;
+  /** Short reason this hit was kept (stars, query matches, recency). */
+  why?: string;
 };
 
 export type ResearchReport = {
@@ -20,6 +26,7 @@ export type ResearchReport = {
   /** Long-form markdown from GPT Researcher / PaperQA2 */
   report?: string;
   mode?: ResearchMode;
+  intent?: ResearchIntent;
   engines?: string[];
   results: ResearchResult[];
   notes: string[];

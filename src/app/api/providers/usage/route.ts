@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
-import { getProviderUsageCards } from "@/lib/providers/usage";
+import {
+  getProviderUsageCards,
+  localProviderUsageCards,
+} from "@/lib/providers/usage";
 import { ensureSecretsLoaded } from "@/lib/env/secrets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 type CacheEntry = {
   at: number;
@@ -11,8 +15,8 @@ type CacheEntry = {
 };
 let cache: CacheEntry | null = null;
 const TTL_MS = 60_000;
-/** Hard ceiling so Command Center never waits on slow portal APIs. */
-const FETCH_BUDGET_MS = 12_000;
+/** Safety net. Each provider is already capped at 7s inside getProviderUsageCards. */
+const FETCH_BUDGET_MS = 22_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -62,9 +66,13 @@ export async function GET(req: Request) {
         fetchedAt: new Date(cache.at).toISOString(),
       });
     }
-    return NextResponse.json(
-      { error: msg, providers: [] },
-      { status: 500 },
-    );
+    // Always keep the three cards on screen (local tokens/spend).
+    return NextResponse.json({
+      providers: localProviderUsageCards(),
+      cached: false,
+      stale: true,
+      error: msg,
+      fetchedAt: new Date().toISOString(),
+    });
   }
 }

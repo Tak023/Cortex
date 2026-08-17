@@ -1,8 +1,17 @@
 import { nanoid } from "nanoid";
 import { chatWithGrok, isAiConfigured } from "@/lib/ai/client";
-import { gatherResearchHits, pickTopResults } from "./search";
+import {
+  classifyUrl,
+  enrichHits,
+  gatherResearchHits,
+  hitKey,
+  pickTopResults,
+  prettySourceTitle,
+  whyHit,
+} from "./search";
 import { saveReport } from "./store";
 import { runGptResearcher, runPaperQa } from "./python";
+import type { ParsedResearchQuery } from "./query";
 import type {
   ResearchMode,
   ResearchReport,
@@ -17,25 +26,22 @@ function mergeEngineUrls(
   results: ResearchResult[],
   urls: string[] | undefined,
 ): ResearchResult[] {
-  const have = new Set(results.map((r) => r.url.replace(/\/+$/, "").toLowerCase()));
+  const have = new Set(results.map((r) => hitKey(r.url)));
   const extra: ResearchResult[] = [];
   for (const raw of urls || []) {
     const url = String(raw || "").trim();
     if (!url.startsWith("http")) continue;
-    const key = url.replace(/\/+$/, "").toLowerCase();
+    const key = hitKey(url);
     if (have.has(key)) continue;
     have.add(key);
     extra.push({
       rank: results.length + extra.length + 1,
-      kind: /youtube\.com|youtu\.be/i.test(url)
-        ? "youtube"
-        : /github\.com/i.test(url)
-          ? "github"
-          : "website",
-      title: url,
+      kind: classifyUrl(url),
+      title: prettySourceTitle(url),
       url,
       snippet: "GPT Researcher source",
       source: "gpt-researcher",
+      why: "GPT Researcher",
     });
   }
   return [...results, ...extra].map((r, i) => ({ ...r, rank: i + 1 }));
@@ -46,27 +52,40 @@ async function grokWriteup(
   results: ResearchResult[],
   mode: ResearchMode,
   notes: string[],
+  parsed?: ParsedResearchQuery,
 ): Promise<string> {
   if (!isAiConfigured()) {
     return `Found ${results.length} sources. Configure XAI_API_KEY (or OpenAI) to write a ${mode === "quick" ? "briefing" : "full report"}.`;
   }
+  const listHint =
+    parsed?.intent === "github"
+      ? "If they asked for top/trending repos, lead with a markdown table: Rank | Repo | Why | Stars/age | URL."
+      : parsed?.intent === "youtube"
+        ? "If they asked for top videos, lead with a markdown table: Rank | Video | Channel | Why | URL."
+        : "If they asked for a ranked list, lead with a markdown table of the best matching items.";
   try {
     const grok = await chatWithGrok({
       temperature: 0.2,
-      maxTokens: mode === "quick" ? 500 : 1600,
+      maxTokens: mode === "quick" ? 700 : 1600,
       messages: [
         {
           role: "system",
           content:
-            mode === "quick"
-              ? "You are a research analyst. Write a 3–6 paragraph briefing from the sources. Do not invent URLs or facts."
-              : "You are a research analyst. Write a structured report: Abstract, Key findings, Evidence, Counterpoints, Recommendations. Do not invent URLs or facts.",
+            "You are a research analyst. Answer the user's question first using only the sources below. " +
+            "Do not invent URLs, dates, or star counts. Do not narrate the search process. " +
+            "If a source is an aggregator or off-topic, skip it. " +
+            listHint,
         },
         {
           role: "user",
-          content: `Topic: ${topic}\n\nSources:\n${results
-            .slice(0, mode === "quick" ? 12 : 24)
-            .map((r) => `${r.rank}. [${r.kind}] ${r.title} — ${r.snippet} (${r.url})`)
+          content: `Question: ${topic}\nIntent: ${parsed?.intent || "general"}${
+            parsed?.days ? `\nRecency: last ${parsed.days} days` : ""
+          }\n\nSources (already ranked):\n${results
+            .slice(0, mode === "quick" ? 16 : 28)
+            .map(
+              (r) =>
+                `${r.rank}. [${r.kind}] ${r.title} — ${r.snippet}${r.extra ? ` (${r.extra})` : ""}${r.why ? ` [${r.why}]` : ""} (${r.url})`,
+            )
             .join("\n")}`,
         },
       ],
@@ -88,64 +107,81 @@ export async function runDeepResearch(
   }
 
   const limit = mode === "quick" ? QUICK_RESULT_LIMIT : RESULT_LIMIT;
-  const { hits, notes } = await gatherResearchHits(topic);
-  const top = pickTopResults(hits, limit);
+  const { hits, notes, parsed } = await gatherResearchHits(topic);
+  const fetchLimit = mode === "quick" ? 8 : 12;
+  const candidates = pickTopResults(
+    hits,
+    Math.min(hits.length, Math.max(limit * 2, fetchLimit)),
+    parsed.intent,
+  );
+  const enriched = await enrichHits(candidates, parsed, fetchLimit);
+  const top = pickTopResults(enriched, limit, parsed.intent);
   if (!top.length) {
     throw new Error(
       `No live results for “${topic}”. Check network / search providers and try again.`,
     );
   }
+  notes.push(`Fetched excerpts for up to ${fetchLimit} pages`);
 
   let results: ResearchResult[] = top.map((h, i) => ({
     rank: i + 1,
     kind: h.kind,
-    title: h.title,
+    title:
+      !h.title.trim() || h.title === h.url ? prettySourceTitle(h.url) : h.title,
     url: h.url,
     snippet: h.snippet,
     source: h.source,
     extra: h.extra,
+    why: whyHit(h, parsed) || undefined,
   }));
 
   const engines: string[] = ["cortex-search"];
   const reportParts: string[] = [];
+  const engineQuery = parsed.search || topic;
+  const sourceUrls = results
+    .filter((r) => r.kind !== "youtube")
+    .map((r) => r.url)
+    .slice(0, 16);
+  const runPapers = mode === "deep" && parsed.intent === "papers";
 
-  if (mode === "quick") {
-    notes.push("Quick Research — GPT Researcher (assafelovic/gpt-researcher)");
-    const gptr = await runGptResearcher(topic, "quick", 150_000);
-    if (gptr.ok && gptr.report?.trim()) {
-      engines.push("gpt-researcher");
-      reportParts.push(gptr.report.trim());
-      results = mergeEngineUrls(results, gptr.urls);
-    } else {
-      notes.push(
-        `GPT Researcher unavailable (${gptr.error || "no report"}) — Cortex briefing`,
-      );
-    }
-  } else {
-    notes.push(
-      "Deep Report — GPT Researcher + PaperQA2 (Future-House/paper-qa)",
-    );
-    const [gptr, pqa] = await Promise.all([
-      runGptResearcher(topic, "deep", 240_000),
-      runPaperQa(topic, 240_000),
-    ]);
-    if (gptr.ok && gptr.report?.trim()) {
-      engines.push("gpt-researcher");
-      reportParts.push(`## Web research (GPT Researcher)\n\n${gptr.report.trim()}`);
-      results = mergeEngineUrls(results, gptr.urls);
-    } else {
-      notes.push(`GPT Researcher skipped (${gptr.error || "no report"})`);
-    }
-    if (pqa.ok && pqa.answer?.trim()) {
-      engines.push("paper-qa");
-      reportParts.push(`## Literature (PaperQA2)\n\n${pqa.answer.trim()}`);
-    } else {
-      notes.push(`PaperQA2 skipped (${pqa.error || "no answer"})`);
-    }
+  notes.push(
+    mode === "quick"
+      ? "Quick Research — Grok briefing + GPT Researcher"
+      : "Deep Report — Grok briefing + GPT Researcher + optional PaperQA2",
+  );
+  if (sourceUrls.length) {
+    notes.push(`GPT Researcher seeded with ${sourceUrls.length} ranked URLs`);
   }
 
-  if (!reportParts.length) {
-    reportParts.push(await grokWriteup(topic, results, mode, notes));
+  const [briefing, gptr, pqa] = await Promise.all([
+    grokWriteup(topic, results, mode, notes, parsed),
+    runGptResearcher(
+      engineQuery,
+      mode === "quick" ? "quick" : "deep",
+      mode === "quick" ? 150_000 : 240_000,
+      sourceUrls,
+    ),
+    runPapers
+      ? runPaperQa(engineQuery, 240_000)
+      : Promise.resolve({
+          ok: false as const,
+          error: "skipped — not a literature query",
+        }),
+  ]);
+
+  reportParts.push(briefing);
+  if (gptr.ok && gptr.report?.trim()) {
+    engines.push("gpt-researcher");
+    reportParts.push(`## GPT Researcher\n\n${gptr.report.trim()}`);
+    results = mergeEngineUrls(results, gptr.urls);
+  } else {
+    notes.push(`GPT Researcher skipped (${gptr.error || "no report"})`);
+  }
+  if (pqa.ok && pqa.answer?.trim()) {
+    engines.push("paper-qa");
+    reportParts.push(`## Literature (PaperQA2)\n\n${pqa.answer.trim()}`);
+  } else if (mode === "deep") {
+    notes.push(`PaperQA2 skipped (${pqa.error || "no answer"})`);
   }
 
   const reportMd = reportParts.join("\n\n");
@@ -168,6 +204,7 @@ export async function runDeepResearch(
     summary: firstPara.slice(0, 800),
     report: reportMd,
     mode,
+    intent: parsed.intent,
     engines,
     results,
     notes,

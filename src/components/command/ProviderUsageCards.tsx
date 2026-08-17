@@ -33,6 +33,22 @@ const DOT: Record<string, string> = {
   hermes: "bg-emerald-400",
 };
 
+const PLACEHOLDERS: ProviderCard[] = (
+  ["claude", "grok", "hermes"] as const
+).map((id) => ({
+  id,
+  label:
+    id === "claude" ? "Claude Code" : id === "grok" ? "Grok" : "Hermes",
+  creditsAvailableLabel: "—",
+  spentThisMonthLabel: "—",
+  tokensThisMonthLabel: "—",
+  source: "local",
+  configured: false,
+  creditsAvailable: null,
+  spentThisMonth: null,
+  tokensThisMonth: null,
+}));
+
 export function ProviderUsageCards({ className }: { className?: string }) {
   const [cards, setCards] = useState<ProviderCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +63,7 @@ export function ProviderUsageCards({ className }: { className?: string }) {
     try {
       const q = refresh ? "?refresh=1" : "";
       const ctrl = new AbortController();
-      const kill = window.setTimeout(() => ctrl.abort(), 15_000);
+      const kill = window.setTimeout(() => ctrl.abort(), 25_000);
       const res = await fetch(`/api/providers/usage${q}`, {
         cache: "no-store",
         signal: ctrl.signal,
@@ -129,30 +145,7 @@ export function ProviderUsageCards({ className }: { className?: string }) {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        {(loading && !cards.length
-          ? (["claude", "grok", "hermes"] as const).map(
-              (id): ProviderCard => ({
-                id,
-                label:
-                  id === "claude"
-                    ? "Claude Code"
-                    : id === "grok"
-                      ? "Grok"
-                      : "Hermes",
-                creditsAvailableLabel: "—",
-                spentThisMonthLabel: "—",
-                tokensThisMonthLabel: "—",
-                source: "local",
-                configured: false,
-                creditsAvailable: null,
-                spentThisMonth: null,
-                tokensThisMonth: null,
-                detail: undefined,
-                consoleUrl: undefined,
-              }),
-            )
-          : cards
-        ).map((p) => (
+        {(cards.length ? cards : PLACEHOLDERS).map((p) => (
           <Card
             key={p.id}
             className={cn(

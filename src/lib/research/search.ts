@@ -1,5 +1,14 @@
 import { ensureSecretsLoaded } from "@/lib/env/secrets";
+import { fetchGitHubTrending } from "@/lib/news/feeds";
+import { fetchPageExcerpt } from "./fetchPage";
 import { searchRivalSearch } from "@/lib/search/rivalSearch";
+import {
+  githubKeywords,
+  parseResearchQuery,
+  tokenize,
+  type ParsedResearchQuery,
+  type ResearchIntent,
+} from "./query";
 import type { ResearchKind } from "./types";
 
 export type RawHit = {
@@ -10,6 +19,7 @@ export type RawHit = {
   kind: ResearchKind;
   score: number;
   extra?: string;
+  why?: string;
 };
 
 const UA =
@@ -96,21 +106,143 @@ function normalizeUrl(raw: string): string | null {
   }
 }
 
-function scoreHit(kind: ResearchKind, url: string, title: string): number {
-  let s = 10;
-  if (kind === "github") s += 12;
-  if (kind === "youtube") s += 10;
-  const host = (() => {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return "";
+const SEO_HOSTS = new Set([
+  "researchgate.net",
+  "spj.science.org",
+  "ghtrends.dev",
+  "gittrend.io",
+  "trending.magikaru.com",
+  "git-trends.github.io",
+  "gitdiscover.org",
+  "findarepo.com",
+  "gitstar.space",
+  "video-rankings.com",
+  "reelmind.ai",
+  "promptiex.com",
+  "toolradar.com",
+  "fast.io",
+]);
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isSeoFarm(host: string): boolean {
+  if (SEO_HOSTS.has(host)) return true;
+  return /(trend|ranking|listicle|top-?10)/i.test(host);
+}
+
+function overlapScore(query: string, text: string): number {
+  const q = tokenize(query);
+  if (!q.length) return 0;
+  const hay = new Set(tokenize(text));
+  let hit = 0;
+  for (const w of q) if (hay.has(w)) hit += 1;
+  return (hit / q.length) * 22;
+}
+
+export function scoreHit(
+  hit: Pick<RawHit, "kind" | "url" | "title" | "snippet">,
+  parsed: ParsedResearchQuery,
+): number {
+  const host = hostOf(hit.url);
+  const path = pathOf(hit.url);
+  const blob = `${hit.title} ${hit.snippet} ${host}`;
+  let s = 6 + overlapScore(parsed.search, blob);
+
+  if (parsed.intent === "github") {
+    if (hit.kind === "github") s += 16;
+    if (hit.kind === "youtube") s -= 10;
+  } else if (parsed.intent === "youtube") {
+    if (hit.kind === "youtube") s += 16;
+    if (hit.kind === "github") s -= 8;
+  } else if (parsed.intent === "papers") {
+    if (hit.kind === "youtube") s -= 6;
+    if (/\barxiv\.org|\.edu$|\.gov$|acm\.org|ieee\.org|nature\.com|sciencedirect\.com\b/i.test(host)) {
+      s += 10;
     }
-  })();
-  if (/\b(docs|developer|dev|wiki|official)\b/i.test(host + title)) s += 6;
+  } else {
+    if (hit.kind === "github") s += 4;
+    if (hit.kind === "youtube") s += 3;
+  }
+
+  if (/\b(docs|developer|official)\b/i.test(host + hit.title)) s += 5;
   if (/\.(edu|gov)$/i.test(host)) s += 4;
-  if (title.length > 12) s += 2;
+  if (hit.title.length > 12) s += 1;
+
+  if (isSeoFarm(host)) s -= 18;
+  if (host.endsWith("wikipedia.org")) {
+    const leaf = (path.split("/").pop() || "").replace(/_/g, " ");
+    const wikiOverlap = overlapScore(parsed.search, leaf);
+    if (wikiOverlap < 8) s -= 28;
+    else if (parsed.intent !== "general" && parsed.intent !== "papers") s -= 10;
+    else s -= 3;
+  }
+
   return s;
+}
+
+export function hitKey(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    if (host === "youtu.be") return `yt:${u.pathname.replace(/^\//, "")}`;
+    if (host === "youtube.com" || host.endsWith(".youtube.com")) {
+      const v = u.searchParams.get("v");
+      if (v) return `yt:${v}`;
+    }
+    if (host === "github.com") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) return `gh:${parts[0]}/${parts[1]}`.toLowerCase();
+    }
+    return `${host}${u.pathname.replace(/\/+$/, "")}`.toLowerCase();
+  } catch {
+    return url.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+export function mixForIntent(
+  intent: ResearchIntent,
+  limit: number,
+): Record<ResearchKind, number> {
+  if (intent === "github") {
+    return {
+      github: Math.round(limit * 0.6),
+      website: Math.round(limit * 0.25),
+      youtube: Math.round(limit * 0.15),
+    };
+  }
+  if (intent === "youtube") {
+    return {
+      youtube: Math.round(limit * 0.6),
+      website: Math.round(limit * 0.3),
+      github: Math.round(limit * 0.1),
+    };
+  }
+  if (intent === "papers") {
+    return {
+      website: Math.round(limit * 0.7),
+      github: Math.round(limit * 0.2),
+      youtube: Math.round(limit * 0.1),
+    };
+  }
+  return {
+    website: Math.round(limit * 0.4),
+    youtube: Math.round(limit * 0.3),
+    github: Math.round(limit * 0.3),
+  };
 }
 
 async function searchTavily(query: string): Promise<RawHit[]> {
@@ -223,19 +355,64 @@ async function searchYoutube(topic: string): Promise<RawHit[]> {
   }
 }
 
-async function searchGithubRepos(topic: string): Promise<RawHit[]> {
+function githubHeaders(): Record<string, string> {
+  ensureSecretsLoaded();
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "Cortex-Research",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const token =
+    process.env.GITHUB_TOKEN?.trim() ||
+    process.env.GH_TOKEN?.trim() ||
+    process.env.GITHUB_PAT?.trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+async function searchGithubTrending(
+  parsed: ParsedResearchQuery,
+  limit: number,
+): Promise<RawHit[]> {
+  const days = parsed.days || 14;
+  const keywords = githubKeywords(parsed.search);
   try {
+    const items = await fetchGitHubTrending(Math.min(30, Math.max(limit, 15)), {
+      days,
+      keywords,
+    });
+    return items.map((it) => ({
+      title: it.title,
+      url: it.url,
+      snippet: (it.snippet || "New GitHub repository").slice(0, 400),
+      source: "github-trending",
+      kind: "github" as const,
+      score: 0,
+      extra: it.tags?.filter((t) => !t.startsWith("#")).join(" · ") || undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function searchGithubRepos(
+  topic: string,
+  parsed?: ParsedResearchQuery,
+): Promise<RawHit[]> {
+  try {
+    const parts = [topic.trim(), "fork:false"].filter(Boolean);
+    if (parsed?.days) {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - parsed.days);
+      parts.push(`created:>=${d.toISOString().slice(0, 10)}`);
+    }
     const url = new URL("https://api.github.com/search/repositories");
-    url.searchParams.set("q", topic);
+    url.searchParams.set("q", parts.join(" "));
     url.searchParams.set("sort", "stars");
     url.searchParams.set("order", "desc");
     url.searchParams.set("per_page", "25");
     const res = await fetch(url.toString(), {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Cortex-Research",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
+      headers: githubHeaders(),
       signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) return [];
@@ -286,7 +463,7 @@ function toHits(
       snippet,
       source,
       kind,
-      score: scoreHit(kind, url, title),
+      score: 0,
     });
   }
   return out;
@@ -311,41 +488,83 @@ async function searchWebQuery(query: string): Promise<RawHit[]> {
   return [...rivalHits, ...tavily, ...ddg];
 }
 
-/** Deep pass: general web + YouTube + GitHub in parallel. */
+function rescore(hits: RawHit[], parsed: ParsedResearchQuery): RawHit[] {
+  return hits.map((h) => ({ ...h, score: scoreHit(h, parsed) }));
+}
+
+/** Deep pass: rewritten query + intent-aware providers. */
 export async function gatherResearchHits(topic: string): Promise<{
   hits: RawHit[];
   notes: string[];
+  parsed: ParsedResearchQuery;
 }> {
-  const notes: string[] = [];
-  const [web, ytWeb, ytApi, ghSearch, ghApi] = await Promise.all([
-    searchWebQuery(topic),
-    searchWebQuery(`${topic} site:youtube.com`),
-    searchYoutube(topic),
-    searchWebQuery(`${topic} site:github.com`),
-    searchGithubRepos(topic),
+  const parsed = parseResearchQuery(topic);
+  const q = parsed.search;
+  const notes: string[] = [
+    `Search “${q}” · ${parsed.intent}${parsed.days ? ` · last ${parsed.days}d` : ""}`,
+  ];
+
+  const wantYt = parsed.intent !== "github" && parsed.intent !== "papers";
+  const wantGhWeb = parsed.intent !== "youtube";
+
+  const [web, ytWeb, ytApi, ghSearch, ghApi, ghTrend] = await Promise.all([
+    searchWebQuery(q),
+    wantYt ? searchWebQuery(`${q} site:youtube.com`) : Promise.resolve([]),
+    parsed.intent === "papers" ? Promise.resolve([]) : searchYoutube(q),
+    wantGhWeb ? searchWebQuery(`${q} site:github.com`) : Promise.resolve([]),
+    parsed.intent === "youtube"
+      ? Promise.resolve([])
+      : searchGithubRepos(githubKeywords(q) || q, parsed),
+    parsed.intent === "github" || parsed.wantsTrending
+      ? searchGithubTrending(parsed, 30)
+      : Promise.resolve([]),
   ]);
 
   const yt = [...ytWeb, ...ytApi];
-  const merged = [...web, ...yt, ...ghSearch, ...ghApi];
+  const merged = rescore(
+    [...web, ...yt, ...ghSearch, ...ghApi, ...ghTrend],
+    parsed,
+  );
   if (!web.length) notes.push("General web search returned no hits");
-  if (!yt.some((h) => h.kind === "youtube")) notes.push("No YouTube videos found");
-  if (!ghApi.length && !ghSearch.some((h) => h.kind === "github")) {
+  if (wantYt && !yt.some((h) => h.kind === "youtube")) {
+    notes.push("No YouTube videos found");
+  }
+  if (
+    !ghApi.length &&
+    !ghTrend.length &&
+    !ghSearch.some((h) => h.kind === "github")
+  ) {
     notes.push("No GitHub projects found");
+  } else if (ghTrend.length) {
+    notes.push(
+      `GitHub trending: ${ghTrend.length} repos created in the last ${parsed.days || 14}d`,
+    );
   } else {
     notes.push("GitHub ranked by stars when the API responded");
   }
 
-  return { hits: merged, notes };
+  return { hits: merged, notes, parsed };
 }
 
-export function pickTopResults(hits: RawHit[], limit = 50): RawHit[] {
+export function pickTopResults(
+  hits: RawHit[],
+  limit = 50,
+  intent: ResearchIntent = "general",
+): RawHit[] {
   const byUrl = new Map<string, RawHit>();
   for (const hit of hits) {
-    const key = hit.url.replace(/\/+$/, "").toLowerCase();
+    const key = hitKey(hit.url);
     const prev = byUrl.get(key);
     if (!prev || hit.score > prev.score) byUrl.set(key, hit);
   }
-  const unique = [...byUrl.values()].sort((a, b) => b.score - a.score);
+  let wikiKept = 0;
+  const unique = [...byUrl.values()]
+    .sort((a, b) => b.score - a.score)
+    .filter((h) => {
+      if (!hostOf(h.url).endsWith("wikipedia.org")) return true;
+      wikiKept += 1;
+      return wikiKept <= 1;
+    });
 
   const buckets: Record<ResearchKind, RawHit[]> = {
     website: [],
@@ -354,6 +573,7 @@ export function pickTopResults(hits: RawHit[], limit = 50): RawHit[] {
   };
   for (const h of unique) buckets[h.kind].push(h);
 
+  const mix = mixForIntent(intent, limit);
   const picked: RawHit[] = [];
   const take = (kind: ResearchKind, n: number) => {
     while (n > 0 && buckets[kind].length) {
@@ -361,10 +581,9 @@ export function pickTopResults(hits: RawHit[], limit = 50): RawHit[] {
       n -= 1;
     }
   };
-  // Guarantee a mix when sources exist, then fill by remaining score.
-  take("website", 20);
-  take("youtube", 15);
-  take("github", 15);
+  take("website", mix.website);
+  take("youtube", mix.youtube);
+  take("github", mix.github);
   const rest = [...buckets.website, ...buckets.youtube, ...buckets.github].sort(
     (a, b) => b.score - a.score,
   );
@@ -373,4 +592,63 @@ export function pickTopResults(hits: RawHit[], limit = 50): RawHit[] {
     picked.push(h);
   }
   return picked.slice(0, limit);
+}
+
+export function prettySourceTitle(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (host === "github.com") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+    }
+    if (host === "youtu.be" || host.includes("youtube.com")) {
+      return u.searchParams.get("v") || host;
+    }
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    if (last) return decodeURIComponent(last).replace(/[-_]+/g, " ").slice(0, 80);
+    return host;
+  } catch {
+    return url;
+  }
+}
+
+export function whyHit(hit: RawHit, parsed: ParsedResearchQuery): string {
+  const bits: string[] = [];
+  if (hit.extra) bits.push(hit.extra);
+  const hay = new Set(tokenize(`${hit.title} ${hit.snippet}`));
+  const matches = tokenize(parsed.search).filter((w) => hay.has(w));
+  if (matches.length) bits.push(`matches ${matches.slice(0, 4).join(", ")}`);
+  if (hit.source === "github-trending") bits.push("created in window");
+  if (hit.source === "gpt-researcher") bits.push("GPT Researcher");
+  return bits.join(" · ");
+}
+
+/** Fetch excerpts for the top web/GitHub hits and bump scores from page text. */
+export async function enrichHits(
+  hits: RawHit[],
+  parsed: ParsedResearchQuery,
+  fetchLimit = 10,
+): Promise<RawHit[]> {
+  const out = hits.map((h) => ({ ...h }));
+  const jobs: Promise<void>[] = [];
+  let n = 0;
+  for (const hit of out) {
+    if (n >= fetchLimit) break;
+    if (hit.kind === "youtube") continue;
+    n += 1;
+    jobs.push(
+      (async () => {
+        const page = await fetchPageExcerpt(hit.url);
+        if (!page) return;
+        if (page.title && (hit.title === hit.url || hit.title.length < 10)) {
+          hit.title = page.title;
+        }
+        hit.snippet = page.text.slice(0, 400);
+        hit.score = scoreHit(hit, parsed) + 5;
+      })(),
+    );
+  }
+  await Promise.all(jobs);
+  return out.sort((a, b) => b.score - a.score);
 }

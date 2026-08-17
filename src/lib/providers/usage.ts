@@ -146,7 +146,29 @@ type ClaudeConsoleAuth = {
  * These are not the Admin API key — they are the browser session used while
  * logged into platform.claude.com.
  */
+let consoleAuthCache: { at: number; value: ClaudeConsoleAuth | null } | null =
+  null;
+
+/** Last good Console prepaid + spend so a slow Firefox/API pass does not flash Max %. */
+let lastClaudeConsole: {
+  at: number;
+  creditsAvailable: number;
+  costUsd: number;
+  tokens: number;
+  orgName?: string;
+  orgId?: string;
+} | null = null;
+
 function loadClaudeConsoleAuth(): ClaudeConsoleAuth | null {
+  if (consoleAuthCache && Date.now() - consoleAuthCache.at < 30_000) {
+    return consoleAuthCache.value;
+  }
+  const value = loadClaudeConsoleAuthUncached();
+  consoleAuthCache = { at: Date.now(), value };
+  return value;
+}
+
+function loadClaudeConsoleAuthUncached(): ClaudeConsoleAuth | null {
   ensureSecretsLoaded();
   const orgId =
     process.env.ANTHROPIC_ORG_ID?.trim() ||
@@ -176,7 +198,17 @@ function loadClaudeConsoleAuth(): ClaudeConsoleAuth | null {
     const profiles = fs
       .readdirSync(profilesRoot, { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((d) => path.join(profilesRoot, d.name));
+      .map((d) => path.join(profilesRoot, d.name))
+      .sort((a, b) => {
+        const mt = (p: string) => {
+          try {
+            return fs.statSync(path.join(p, "cookies.sqlite")).mtimeMs;
+          } catch {
+            return 0;
+          }
+        };
+        return mt(b) - mt(a);
+      });
 
     for (const prof of profiles) {
       const dbPath = path.join(prof, "cookies.sqlite");
@@ -273,46 +305,53 @@ async function fetchClaudeConsoleDashboard(
   };
   const base = `https://platform.claude.com/api/organizations/${encodeURIComponent(auth.orgId)}`;
 
+  const consoleGet = (path: string) =>
+    fetch(path ? `${base}${path}` : base, {
+      headers,
+      signal: AbortSignal.timeout(6_000),
+      cache: "no-store",
+    });
+
+  const [orgRes, creditsRes, spendRes] = await Promise.allSettled([
+    consoleGet(""),
+    consoleGet("/prepaid/credits"),
+    consoleGet("/current_spend"),
+  ]);
+
   let creditsUsd: number | null = null;
   let spentUsd: number | null = null;
   let orgName: string | undefined;
   let ok = false;
   let detail: string | undefined;
 
-  try {
-    const res = await fetch(base, {
-      headers,
-      signal: AbortSignal.timeout(10_000),
-      cache: "no-store",
-    });
-    if (res.ok) {
-      const json = (await res.json()) as { name?: string };
+  if (orgRes.status === "fulfilled" && orgRes.value.ok) {
+    try {
+      const json = (await orgRes.value.json()) as { name?: string };
       if (json.name) orgName = json.name;
+    } catch {
+      /* optional */
     }
-  } catch {
-    /* optional */
   }
 
-  try {
-    const res = await fetch(`${base}/prepaid/credits`, {
-      headers,
-      signal: AbortSignal.timeout(12_000),
-      cache: "no-store",
-    });
+  if (creditsRes.status === "fulfilled") {
+    const res = creditsRes.value;
     if (res.ok) {
-      const json = (await res.json()) as {
-        amount?: number;
-        balance?: { credits?: { amount_minor?: number; exponent?: number } };
-        balance_credits?: number;
-      };
-      // amount is minor units (cents), e.g. 2493 → $24.93
-      if (typeof json.amount === "number" && Number.isFinite(json.amount)) {
-        creditsUsd = json.amount / 100;
-      } else if (json.balance?.credits?.amount_minor != null) {
-        const exp = json.balance.credits.exponent ?? 2;
-        creditsUsd = json.balance.credits.amount_minor / 10 ** exp;
+      try {
+        const json = (await res.json()) as {
+          amount?: number;
+          balance?: { credits?: { amount_minor?: number; exponent?: number } };
+          balance_credits?: number;
+        };
+        if (typeof json.amount === "number" && Number.isFinite(json.amount)) {
+          creditsUsd = json.amount / 100;
+        } else if (json.balance?.credits?.amount_minor != null) {
+          const exp = json.balance.credits.exponent ?? 2;
+          creditsUsd = json.balance.credits.amount_minor / 10 ** exp;
+        }
+        ok = true;
+      } catch (e) {
+        detail = e instanceof Error ? e.message : String(e);
       }
-      ok = true;
     } else {
       detail = `Console credits API ${res.status}${
         res.status === 401 || res.status === 403
@@ -320,28 +359,33 @@ async function fetchClaudeConsoleDashboard(
           : ""
       }`;
     }
-  } catch (e) {
-    detail = e instanceof Error ? e.message : String(e);
+  } else {
+    detail =
+      creditsRes.reason instanceof Error
+        ? creditsRes.reason.message
+        : String(creditsRes.reason);
   }
 
-  try {
-    const res = await fetch(`${base}/current_spend`, {
-      headers,
-      signal: AbortSignal.timeout(12_000),
-      cache: "no-store",
-    });
+  if (spendRes.status === "fulfilled") {
+    const res = spendRes.value;
     if (res.ok) {
-      const json = (await res.json()) as { amount?: number; resets_at?: string };
-      // amount is cents, e.g. 15107 → $151.07
-      if (typeof json.amount === "number" && Number.isFinite(json.amount)) {
-        spentUsd = json.amount / 100;
+      try {
+        const json = (await res.json()) as { amount?: number; resets_at?: string };
+        if (typeof json.amount === "number" && Number.isFinite(json.amount)) {
+          spentUsd = json.amount / 100;
+        }
+        ok = true;
+      } catch (e) {
+        if (!detail) detail = e instanceof Error ? e.message : String(e);
       }
-      ok = true;
     } else if (!detail) {
       detail = `Console spend API ${res.status}`;
     }
-  } catch (e) {
-    if (!detail) detail = e instanceof Error ? e.message : String(e);
+  } else if (!detail) {
+    detail =
+      spendRes.reason instanceof Error
+        ? spendRes.reason.message
+        : String(spendRes.reason);
   }
 
   return { creditsUsd, spentUsd, ok, orgName, detail };
@@ -394,7 +438,7 @@ async function fetchAnthropicReportPages(
 
     const res = await fetch(url.toString(), {
       headers,
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(8_000),
       cache: "no-store",
     });
     if (!res.ok) {
@@ -463,103 +507,136 @@ async function fetchAnthropicMonth(): Promise<AnthropicMonth> {
     process.env.CLAUDE_ORG_ID?.trim() ||
     consoleAuth?.orgId;
 
-  // 1) Live dashboard cards (credits + spend) — same source as the Console UI
-  if (consoleAuth) {
-    const dash = await fetchClaudeConsoleDashboard(consoleAuth);
-    if (dash.ok) {
-      if (dash.creditsUsd != null) creditsAvailable = dash.creditsUsd;
-      if (dash.spentUsd != null) costUsd = dash.spentUsd;
-      if (dash.orgName) orgName = dash.orgName;
-      ok = true;
-      consoleLive = true;
-      orgId = consoleAuth.orgId;
-    } else if (dash.detail) {
-      detail = dash.detail;
-    }
-  }
-
-  // 2) Org name via Admin key (optional)
-  if (adminHeaders) {
-    try {
-      const meRes = await fetch(
-        "https://api.anthropic.com/v1/organizations/me",
-        {
-          headers: adminHeaders,
-          signal: AbortSignal.timeout(10_000),
-          cache: "no-store",
-        },
-      );
-      if (meRes.ok) {
-        const me = (await meRes.json()) as { id?: string; name?: string };
-        orgName = me.name || undefined;
-        if (me.id) orgId = me.id;
-      }
-    } catch {
-      /* optional */
-    }
-  }
-
-  // 3) Token volume (+ Admin cost as fallback if Console spend missing)
-  if (adminHeaders) {
-    try {
-      const buckets = await fetchAnthropicReportPages(
-        "/v1/organizations/usage_report/messages",
-        {
-          starting_at: starting,
-          ending_at: ending,
-          bucket_width: "1d",
-          limit: "31",
-        },
-        adminHeaders,
-      );
-      for (const bucket of buckets) {
-        for (const raw of bucket.results || []) {
-          if (!raw || typeof raw !== "object") continue;
-          tokens += sumAnthropicUsageTokens(
-            raw as Parameters<typeof sumAnthropicUsageTokens>[0],
-          );
-        }
-      }
-      ok = true;
-    } catch (e) {
-      if (!detail) detail = e instanceof Error ? e.message : String(e);
-    }
-
-    if (!consoleLive || costUsd <= 0) {
-      try {
-        const buckets = await fetchAnthropicReportPages(
-          "/v1/organizations/cost_report",
-          {
-            starting_at: starting,
-            ending_at: ending,
-            bucket_width: "1d",
-            limit: "31",
-          },
-          adminHeaders,
-        );
+  // Console prepaid + current spend must not wait on Admin usage pagination.
+  const dashP = consoleAuth
+    ? fetchClaudeConsoleDashboard(consoleAuth)
+    : Promise.resolve(null);
+  const adminP = adminHeaders
+    ? (async () => {
+        let name: string | undefined;
+        let id: string | undefined;
+        let tok = 0;
         let adminCost = 0;
-        for (const bucket of buckets) {
-          for (const raw of bucket.results || []) {
-            if (!raw || typeof raw !== "object") continue;
-            const r = raw as { amount?: string | number };
-            const cents =
-              typeof r.amount === "string"
-                ? Number(r.amount)
-                : Number(r.amount ?? 0);
-            if (Number.isFinite(cents)) adminCost += cents / 100;
+        let err: string | undefined;
+        try {
+          const meRes = await fetch(
+            "https://api.anthropic.com/v1/organizations/me",
+            {
+              headers: adminHeaders,
+              signal: AbortSignal.timeout(6_000),
+              cache: "no-store",
+            },
+          );
+          if (meRes.ok) {
+            const me = (await meRes.json()) as { id?: string; name?: string };
+            name = me.name || undefined;
+            if (me.id) id = me.id;
           }
+        } catch {
+          /* optional */
         }
-        if (!consoleLive) costUsd = adminCost;
-        ok = true;
-      } catch (e) {
-        if (!detail) detail = e instanceof Error ? e.message : String(e);
-      }
-    }
+        try {
+          const buckets = await fetchAnthropicReportPages(
+            "/v1/organizations/usage_report/messages",
+            {
+              starting_at: starting,
+              ending_at: ending,
+              bucket_width: "1d",
+              limit: "31",
+            },
+            adminHeaders,
+          );
+          for (const bucket of buckets) {
+            for (const raw of bucket.results || []) {
+              if (!raw || typeof raw !== "object") continue;
+              tok += sumAnthropicUsageTokens(
+                raw as Parameters<typeof sumAnthropicUsageTokens>[0],
+              );
+            }
+          }
+        } catch (e) {
+          err = e instanceof Error ? e.message : String(e);
+        }
+        try {
+          const buckets = await fetchAnthropicReportPages(
+            "/v1/organizations/cost_report",
+            {
+              starting_at: starting,
+              ending_at: ending,
+              bucket_width: "1d",
+              limit: "31",
+            },
+            adminHeaders,
+          );
+          for (const bucket of buckets) {
+            for (const raw of bucket.results || []) {
+              if (!raw || typeof raw !== "object") continue;
+              const r = raw as { amount?: string | number };
+              const cents =
+                typeof r.amount === "string"
+                  ? Number(r.amount)
+                  : Number(r.amount ?? 0);
+              if (Number.isFinite(cents)) adminCost += cents / 100;
+            }
+          }
+        } catch (e) {
+          if (!err) err = e instanceof Error ? e.message : String(e);
+        }
+        return { name, id, tok, adminCost, err };
+      })()
+    : Promise.resolve(null);
+
+  const [dash, admin] = await Promise.all([
+    dashP,
+    settled(adminP, null, 10_000),
+  ]);
+
+  if (dash?.ok) {
+    if (dash.creditsUsd != null) creditsAvailable = dash.creditsUsd;
+    if (dash.spentUsd != null) costUsd = dash.spentUsd;
+    if (dash.orgName) orgName = dash.orgName;
+    ok = true;
+    consoleLive = true;
+    if (consoleAuth) orgId = consoleAuth.orgId;
+  } else if (dash?.detail) {
+    detail = dash.detail;
+  }
+
+  if (admin) {
+    if (admin.name) orgName = admin.name;
+    if (admin.id) orgId = admin.id;
+    tokens = admin.tok;
+    if (!consoleLive) costUsd = admin.adminCost;
+    if (admin.tok > 0 || admin.adminCost > 0) ok = true;
+    if (!detail && admin.err) detail = admin.err;
+  }
+
+  if (tokens <= 0 && lastClaudeConsole && lastClaudeConsole.tokens > 0) {
+    tokens = lastClaudeConsole.tokens;
+  }
+  if (consoleLive && creditsAvailable != null) {
+    lastClaudeConsole = {
+      at: Date.now(),
+      creditsAvailable,
+      costUsd,
+      tokens,
+      orgName,
+      orgId,
+    };
+  } else if (!consoleLive && lastClaudeConsole && Date.now() - lastClaudeConsole.at < 30 * 60_000) {
+    creditsAvailable = lastClaudeConsole.creditsAvailable;
+    if (costUsd <= 0) costUsd = lastClaudeConsole.costUsd;
+    if (tokens <= 0) tokens = lastClaudeConsole.tokens;
+    orgName = orgName || lastClaudeConsole.orgName;
+    orgId = orgId || lastClaudeConsole.orgId;
+    consoleLive = true;
+    ok = true;
+    detail = `Cached platform.claude.com credits (${Math.round((Date.now() - lastClaudeConsole.at) / 1000)}s ago)`;
   }
 
   const emptyOrgUsage = ok && tokens === 0 && costUsd === 0;
   const orgLabel = orgName ? `“${orgName}”` : "Console org";
-  if (ok) {
+  if (ok && !detail) {
     if (consoleLive) {
       detail = `Live from platform.claude.com/dashboard (${orgLabel}) · prepaid credits + current spend`;
     } else if (emptyOrgUsage) {
@@ -713,7 +790,7 @@ async function refreshClaudeOauth(refreshToken: string): Promise<{
         refresh_token: refreshToken,
         client_id: CLAUDE_OAUTH_CLIENT_ID,
       }),
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(6_000),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as {
@@ -770,7 +847,7 @@ async function fetchClaudeCodeUsage(): Promise<ClaudeCodeLive> {
   const oauthGet = async (url: string): Promise<Response> => {
     let res = await fetch(url, {
       headers,
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(6_000),
       cache: "no-store",
     });
     if (res.status === 401) {
@@ -779,7 +856,7 @@ async function fetchClaudeCodeUsage(): Promise<ClaudeCodeLive> {
       creds = refreshed;
       res = await fetch(url, {
         headers: { ...headers, Authorization: `Bearer ${refreshed.accessToken}` },
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(6_000),
         cache: "no-store",
       });
     }
@@ -976,7 +1053,7 @@ async function fetchXaiMonth(): Promise<XaiMonth> {
       `${base}/billing/teams/${encodeURIComponent(teamId)}/postpaid/invoice/preview`,
       {
         headers,
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(6_000),
         cache: "no-store",
       },
     );
@@ -1081,7 +1158,7 @@ async function fetchXaiMonth(): Promise<XaiMonth> {
       `${base}/billing/teams/${encodeURIComponent(teamId)}/prepaid/balance`,
       {
         headers,
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(6_000),
         cache: "no-store",
       },
     );
@@ -1182,7 +1259,7 @@ async function fetchXaiMonth(): Promise<XaiMonth> {
               filters: [],
             },
           }),
-          signal: AbortSignal.timeout(12_000),
+          signal: AbortSignal.timeout(6_000),
           cache: "no-store",
         },
       );
@@ -1669,7 +1746,7 @@ async function fetchNousMonth(): Promise<NousMonth> {
   try {
     let res = await fetch(`${base}/api/oauth/account`, {
       headers,
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(6_000),
       cache: "no-store",
     });
     if (res.status === 401) {
@@ -1683,7 +1760,7 @@ async function fetchNousMonth(): Promise<NousMonth> {
         base = retried.auth.portalBaseUrl;
         res = await fetch(`${base}/api/oauth/account`, {
           headers,
-          signal: AbortSignal.timeout(12_000),
+          signal: AbortSignal.timeout(6_000),
           cache: "no-store",
         });
       }
@@ -1738,7 +1815,7 @@ async function fetchNousMonth(): Promise<NousMonth> {
   try {
     const res = await fetch(`${base}/api/billing/state`, {
       headers,
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(6_000),
       cache: "no-store",
     });
     if (res.ok) {
@@ -1771,7 +1848,7 @@ async function fetchNousMonth(): Promise<NousMonth> {
   try {
     const res = await fetch(`${base}/api/billing/subscription`, {
       headers,
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(6_000),
       cache: "no-store",
     });
     if (res.ok) {
@@ -1843,16 +1920,114 @@ async function fetchNousMonth(): Promise<NousMonth> {
   };
 }
 
+const PROVIDER_FETCH_MS = 7_000;
+/** Console prepaid needs Firefox cookies + dashboard; do not share the 7s cap. */
+const CLAUDE_CONSOLE_FETCH_MS = 15_000;
+
+function emptyAnthropic(detail: string): AnthropicMonth {
+  return { tokens: 0, costUsd: 0, ok: false, detail };
+}
+function emptyXai(detail: string): XaiMonth {
+  return {
+    creditsAvailable: null,
+    spentThisMonth: null,
+    tokensThisMonth: null,
+    ok: false,
+    detail,
+  };
+}
+function emptyNous(detail: string): NousMonth {
+  return {
+    creditsAvailable: null,
+    spentThisMonth: null,
+    tokensThisMonth: null,
+    ok: false,
+    detail,
+  };
+}
+function emptyClaudeCode(detail: string): ClaudeCodeLive {
+  return {
+    ok: false,
+    plan: "",
+    remainingPct: null,
+    extraCreditsUsd: null,
+    extraUsedUsd: null,
+    fiveHourUtil: null,
+    detail,
+  };
+}
+
+async function settled<T>(p: Promise<T>, fallback: T, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Instant cards from Cortex-local usage only — never blocks Mission Control. */
+export function localProviderUsageCards(): ProviderUsageCard[] {
+  ensureSecretsLoaded();
+  return assembleProviderCards(
+    emptyAnthropic("Live Claude APIs unavailable"),
+    emptyXai("Live xAI billing unavailable"),
+    emptyNous("Live Nous Portal unavailable"),
+    emptyClaudeCode("Claude Code usage unavailable"),
+  );
+}
+
 export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
   ensureSecretsLoaded();
 
   const [anthropic, xai, nous, claudeCode] = await Promise.all([
-    fetchAnthropicMonth(),
-    fetchXaiMonth(),
-    fetchNousMonth(),
-    fetchClaudeCodeUsage(),
+    settled(
+      fetchAnthropicMonth(),
+      lastClaudeConsole
+        ? {
+            tokens: lastClaudeConsole.tokens,
+            costUsd: lastClaudeConsole.costUsd,
+            ok: true,
+            consoleLive: true,
+            creditsAvailable: lastClaudeConsole.creditsAvailable,
+            orgName: lastClaudeConsole.orgName,
+            orgId: lastClaudeConsole.orgId,
+            detail: "Cached platform.claude.com credits",
+          }
+        : emptyAnthropic("Claude usage timed out"),
+      CLAUDE_CONSOLE_FETCH_MS,
+    ),
+    settled(
+      fetchXaiMonth(),
+      emptyXai("Grok billing timed out"),
+      PROVIDER_FETCH_MS,
+    ),
+    settled(
+      fetchNousMonth(),
+      emptyNous("Hermes / Nous timed out"),
+      PROVIDER_FETCH_MS,
+    ),
+    settled(
+      fetchClaudeCodeUsage(),
+      emptyClaudeCode("Claude Code usage timed out"),
+      PROVIDER_FETCH_MS,
+    ),
   ]);
 
+  return assembleProviderCards(anthropic, xai, nous, claudeCode);
+}
+
+function assembleProviderCards(
+  anthropic: AnthropicMonth,
+  xai: XaiMonth,
+  nous: NousMonth,
+  claudeCode: ClaudeCodeLive,
+): ProviderUsageCard[] {
   const claudeLocal = localMonthUsage("claude");
   const grokLocal = localMonthUsage("grok");
   const hermesLocal = localMonthUsage("hermes");
@@ -1885,31 +2060,32 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
     : anthropic.ok
       ? anthropic.tokens
       : claudeLocal.tokens;
-  // Credits + spent/mo come from platform.claude.com (prepaid remaining +
-  // current month spend) — same cards as the Console dashboard. Claude Code
-  // Max/Pro extra-usage $ only wins when that wallet is actually enabled.
-  // Session remaining % is a quota, not a dollar credit; keep it in detail.
-  const extraWalletOn = claudeCode.ok && claudeCode.extraCreditsUsd != null;
-  const claudeCredits = extraWalletOn
-    ? claudeCode.extraCreditsUsd
-    : anthropic.creditsAvailable != null
+  // Credits + spent/mo are Console prepaid dollars (platform.claude.com).
+  // Max/Pro session remaining % is a quota, never a credit balance.
+  // Extra-usage $ only fills in when Console did not return a prepaid wallet.
+  const extraWalletOn =
+    !anthropic.consoleLive &&
+    anthropic.creditsAvailable == null &&
+    claudeCode.ok &&
+    claudeCode.extraCreditsUsd != null;
+  const claudeCredits =
+    anthropic.creditsAvailable != null
       ? anthropic.creditsAvailable
-      : creditsFromEnv("claude");
+      : extraWalletOn
+        ? claudeCode.extraCreditsUsd
+        : creditsFromEnv("claude");
   const claudeCreditsLabel =
-    claudeCredits != null
-      ? formatUsd(claudeCredits)
-      : claudeCode.ok && claudeCode.remainingPct != null
-        ? `${Math.round(claudeCode.remainingPct)}% left`
-        : "—";
-  const claudeSpend = extraWalletOn && claudeCode.extraUsedUsd != null
-    ? claudeCode.extraUsedUsd
-    : anthropic.ok && (anthropic.consoleLive || anthropic.costUsd > 0)
+    claudeCredits != null ? formatUsd(claudeCredits) : "—";
+  const claudeSpend =
+    anthropic.consoleLive || (anthropic.ok && anthropic.costUsd > 0)
       ? anthropic.costUsd
-      : claudeUseLocalFallback
-        ? claudeLocal.costUsd
-        : anthropic.ok
-          ? anthropic.costUsd
-          : claudeLocal.costUsd;
+      : extraWalletOn && claudeCode.extraUsedUsd != null
+        ? claudeCode.extraUsedUsd
+        : claudeUseLocalFallback
+          ? claudeLocal.costUsd
+          : anthropic.ok
+            ? anthropic.costUsd
+            : claudeLocal.costUsd;
 
   const grokCredits =
     xai.ok && xai.creditsAvailable != null
@@ -1960,13 +2136,15 @@ export async function getProviderUsageCards(): Promise<ProviderUsageCard[]> {
         ? anthropic.tokens > 0 || claudeCode.ok
           ? "mixed"
           : "claude-console"
-        : claudeCode.ok
+        : extraWalletOn
           ? "claude-console"
           : claudeUseLocalFallback
             ? "mixed"
             : anthropic.ok
               ? "anthropic-admin"
-              : "local",
+              : claudeCode.ok
+                ? "mixed"
+                : "local",
       detail: [
         anthropic.consoleLive
           ? `Live from platform.claude.com${anthropic.orgName ? ` (“${anthropic.orgName}”)` : ""} · prepaid credits + current spend`

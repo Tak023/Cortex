@@ -19,6 +19,13 @@ import {
   Loader2,
   SquareTerminal,
   Search,
+  BookOpen,
+  ChefHat,
+  GraduationCap,
+  Hammer,
+  Wand2,
+  Clapperboard,
+  Workflow,
 } from "lucide-react";
 import { BrandLogo } from "@/components/layout/BrandLogo";
 import { cn } from "@/lib/utils";
@@ -95,6 +102,56 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/research-center/history",
         label: "History",
         icon: History,
+      },
+    ],
+  },
+  {
+    title: "Learning Center",
+    items: [
+      {
+        href: "/learning-center/agents-course",
+        label: "Agent Course",
+        icon: GraduationCap,
+      },
+      {
+        href: "/learning-center/llms-from-scratch",
+        label: "LLMs from Scratch",
+        icon: BookOpen,
+      },
+      {
+        href: "/learning-center/openai-cookbook",
+        label: "OpenAI Cookbook",
+        icon: ChefHat,
+      },
+      {
+        href: "/learning-center/build-your-own-x",
+        label: "Build Your Own X",
+        icon: Hammer,
+      },
+      {
+        href: "/learning-center/generative-ai-for-beginners",
+        label: "Generative AI for Beginners",
+        icon: Wand2,
+      },
+      {
+        href: "/learning-center/ai-agents-for-beginners",
+        label: "AI Agents for Beginners",
+        icon: Bot,
+      },
+    ],
+  },
+  {
+    title: "Video Center",
+    items: [
+      {
+        href: "/video-center/remotion",
+        label: "Remotion",
+        icon: Clapperboard,
+      },
+      {
+        href: "/video-center/comfyui",
+        label: "ComfyUI",
+        icon: Workflow,
       },
     ],
   },

@@ -401,14 +401,18 @@ export const GITHUB_CREATED_WITHIN_DAYS = 14;
  */
 export async function fetchGitHubTrending(
   limit = GITHUB_TOP_N,
+  opts?: { days?: number; keywords?: string },
 ): Promise<NewsItem[]> {
-  const topN = Math.min(Math.max(limit, 1), GITHUB_TOP_N);
-  const since = isoDateDaysAgo(GITHUB_CREATED_WITHIN_DAYS);
-  const cutoffMs =
-    Date.now() - GITHUB_CREATED_WITHIN_DAYS * 24 * 60 * 60 * 1000;
+  const days = Math.min(90, Math.max(1, opts?.days ?? GITHUB_CREATED_WITHIN_DAYS));
+  const keywords = (opts?.keywords || "").trim();
+  const topN = Math.min(Math.max(limit, 1), Math.max(GITHUB_TOP_N, limit));
+  const since = isoDateDaysAgo(days);
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
 
-  // Single search: new projects only, GitHub sorts by stars for us
-  const query = `created:>=${since} fork:false`;
+  // New projects only; optional topic keywords. GitHub sorts by stars.
+  const query = [keywords, `created:>=${since}`, "fork:false"]
+    .filter(Boolean)
+    .join(" ");
 
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
@@ -458,7 +462,7 @@ export async function fetchGitHubTrending(
     const tags: string[] = [
       `#${rank + 1}`,
       `★ ${formatStars(stars)}`,
-      "New (2w)",
+      days === 14 ? "New (2w)" : `New (${days}d)`,
     ];
     if (repo.language) tags.push(repo.language);
     for (const t of (repo.topics || []).slice(0, 1)) {

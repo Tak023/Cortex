@@ -192,6 +192,7 @@ export default function ResearchPage() {
               <h2 className="text-sm font-semibold">
                 Top {report.results.length} sources
                 <span className="ml-2 font-normal text-muted">
+                  {report.intent ? `${report.intent} · ` : ""}
                   {report.counts.website} web · {report.counts.youtube} YouTube ·{" "}
                   {report.counts.github} GitHub
                 </span>

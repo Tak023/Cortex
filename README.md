@@ -8,7 +8,7 @@ Cortex is a unified dashboard and orchestration layer that manages agents and mo
 |---|---|
 | **Platforms** | macOS desktop app (Apple Silicon) · local web |
 | **Style** | Local-first · hybrid cloud + local models |
-| **Version** | 0.2.10 |
+| **Version** | 0.2.11 |
 | **License** | [GPL-3.0](LICENSE) |
 
 <p align="center">
@@ -117,6 +117,22 @@ Highlights since the initial 0.1.x release:
 - `json()` accepts a request timeout, so no fetch can leave the UI spinning forever
 - **Agent terminals open faster**: xterm and its addons load in parallel rather than sequentially, and the agent rail prefetches the terminal route on hover
 
+### Learning Center, Video Center, ranked research (0.2.11)
+
+- **Learning Center** sidebar — in-app syllabi plus official links (HF Learn cannot be iframed):
+  - [Hugging Face Agent Course](https://huggingface.co/learn/agents-course)
+  - [LLMs from Scratch](https://github.com/rasbt/LLMs-from-scratch)
+  - [OpenAI Cookbook](https://github.com/openai/openai-cookbook)
+  - [Build Your Own X](https://github.com/codecrafters-io/build-your-own-x)
+  - [Generative AI for Beginners](https://github.com/microsoft/generative-ai-for-beginners)
+  - [AI Agents for Beginners](https://github.com/microsoft/ai-agents-for-beginners)
+- **Video Center** sidebar:
+  - [Remotion](https://github.com/remotion-dev/remotion) — programmatic React video
+  - [ComfyUI](https://github.com/Comfy-Org/ComfyUI) — node-graph engine for images, video, 3D, and audio
+- **Research ranking** — queries are rewritten and tagged (`github` / `youtube` / `papers` / `general`). Hits are scored, Wikipedia is capped at one, SEO farms are downranked, and GitHub trending uses `created:>=` + `fork:false`. Top pages are fetched and reranked from real excerpts. GPT Researcher is seeded with those ranked URLs; PaperQA2 runs only on Deep Report literature queries. Results have **All / Web / YouTube / GitHub** filters and a **Why** line (stars, token matches, trending window)
+- **Provider cards stay on screen** — each provider is timed independently; a slow portal no longer blanks Claude / Grok / Hermes. Timeouts fall back to local usage instead of an empty 500
+- **Claude Code credits** always show Console **prepaid remaining** and **current spend** (Open Theory org on [platform.claude.com](https://platform.claude.com/dashboard)). Max session remaining % is a quota, not a credit balance — it is never used as the Credits figure. Last good Console dollars are cached so a slow Firefox/API pass does not flash “100% left”
+
 ### Claude Code credits (0.2.10)
 
 - Command Center **Claude Code** card now shows Console **prepaid remaining** and **spend this month**, matching [platform.claude.com/dashboard](https://platform.claude.com/dashboard) (Firefox `sessionKey` for the Console org). Max / Pro session % and extra-usage status stay in the footnote — they no longer replace the dollar credits or force spent/mo to `$0` when extra usage is off
@@ -164,8 +180,19 @@ Highlights since the initial 0.1.x release:
 - Voice or text topic input
 - **Quick Research** — [GPT Researcher](https://github.com/assafelovic/gpt-researcher) briefing + top 20 live sources
 - **Deep Report** — GPT Researcher + [PaperQA2](https://github.com/Future-House/paper-qa) literature answers + top 50 live sources
+- Query rewrite + intent (`github` / `youtube` / `papers` / `general`), relevance scoring, Wikipedia cap, page-excerpt rerank
+- GPT Researcher seeded with Cortex-ranked URLs; PaperQA2 only on literature queries
+- Kind filters (All / Web / YouTube / GitHub) and **Why** metadata on each hit
 - Classified links (web / YouTube / GitHub) and a saved markdown report
 - Local history of researched topics (reopen or delete), tagged by mode
+
+### Learning Center
+- Sidebar syllabi for the Hugging Face Agent Course, rasbt/LLMs-from-scratch, OpenAI Cookbook, Build Your Own X, Microsoft Generative AI for Beginners, and Microsoft AI Agents for Beginners
+- Each tab links out to the official repo / docs (HF Learn sends `X-Frame-Options: DENY`, so it is not iframed)
+
+### Video Center
+- **Remotion** — [remotion-dev/remotion](https://github.com/remotion-dev/remotion): Studio, agent skills, rendering, Player
+- **ComfyUI** — [Comfy-Org/ComfyUI](https://github.com/Comfy-Org/ComfyUI): desktop app, video/image workflows, API examples, Manager
 
 ### Second brain (Obsidian vault)
 - Local Markdown vault as **shared agent memory** — keyword search over notes, grounded Jarvis answers, research seeded from prior knowledge
@@ -283,7 +310,7 @@ Each phase picks an agent using:
 ┌─────────────────────────────────────────────────────────────────┐
 │  UI  ·  Next.js App Router + React 19 + Tailwind                │
 │  Command · Jarvis · Graphify · Agents · Ideas · Projects        │
-│  Orchestration · MCP · Research Center · Settings               │
+│  Orchestration · MCP · Research · Learning · Video · Settings   │
 └────────────────────────────┬────────────────────────────────────┘
                              │  Route Handlers (HTTP API)
 ┌────────────────────────────▼─────────────────────────────────┐
@@ -320,7 +347,7 @@ Desktop shell (Electron)
 | API | Next.js Route Handlers |
 | Orchestration | In-process TypeScript engine |
 | AI (optional) | OpenAI-compatible client → **xAI / SpaceXAI** (`https://api.x.ai/v1`, model `grok-4.5`) |
-| Research | [GPT Researcher](https://github.com/assafelovic/gpt-researcher) + [PaperQA2](https://github.com/Future-House/paper-qa) via isolated `uv run --no-project`; live web / YouTube / GitHub search; Grok fallback |
+| Research | [GPT Researcher](https://github.com/assafelovic/gpt-researcher) + [PaperQA2](https://github.com/Future-House/paper-qa) via isolated `uv run --no-project`; ranked live web / YouTube / GitHub search; Grok fallback |
 | Storage | Local JSON file store + embedded **LanceDB** full-text index |
 | MCP | Official TypeScript SDK client (`@modelcontextprotocol/sdk`) |
 | Desktop | Electron 37, electron-builder (DMG / ZIP, macOS arm64) |
@@ -497,8 +524,18 @@ XAI_API_KEY=
 | `/agents` | Agent fleet, search, filters, controls |
 | `/agents/terminal` | Embedded terminals for launched CLI agents |
 | `/mcp` | MCP catalog, TypeScript client, permissions, LanceDB, audit |
-| `/research-center` | Quick Research / Deep Report — voice/text topic, briefing or full report, live sources |
+| `/research-center` | Quick Research / Deep Report — voice/text topic, ranked live sources, kind filters |
 | `/research-center/history` | Past research topics |
+| `/learning-center` | Course index |
+| `/learning-center/agents-course` | Hugging Face Agent Course |
+| `/learning-center/llms-from-scratch` | rasbt/LLMs-from-scratch |
+| `/learning-center/openai-cookbook` | OpenAI Cookbook |
+| `/learning-center/build-your-own-x` | Build Your Own X |
+| `/learning-center/generative-ai-for-beginners` | Microsoft Generative AI for Beginners |
+| `/learning-center/ai-agents-for-beginners` | Microsoft AI Agents for Beginners |
+| `/video-center` | Video tools index |
+| `/video-center/remotion` | Remotion — programmatic React video |
+| `/video-center/comfyui` | ComfyUI — node-graph image/video engine |
 | `/ideas` | Idea capture, templates, concept generation |
 | `/projects` | Project list |
 | `/projects/[id]` | Workspace: Kanban, memory, artifacts, chat |
@@ -527,7 +564,9 @@ Cortex/
 │       ├── ai/                # Grok client + phase synthesis
 │       ├── mcp/               # Catalog, isolated SDK client, permissions, audit
 │       ├── lancedb/           # Embedded LanceDB index
-│       ├── research/          # Quick Research + Deep Report (GPT Researcher, PaperQA2, live sources)
+│       ├── research/          # Quick Research + Deep Report (query rewrite, ranking, GPT Researcher, PaperQA2)
+│       ├── learning/          # Learning Center syllabi
+│       ├── video/             # Video Center (Remotion, ComfyUI)
 │       ├── vault/             # Second brain: search/write + graph layers
 │       ├── providers/         # Command Center credit cards
 │       ├── store.ts           # Local persistence
@@ -625,9 +664,13 @@ Fixed in **0.2.1** — the Cortex server used to leak Next standalone internals 
 env -u __NEXT_PRIVATE_STANDALONE_CONFIG -u NODE_ENV -u PORT -u HOSTNAME npx next build
 ```
 
+### Claude Code credits show “100% left” or $0.05
+
+Fixed in **0.2.11**. Credits and spent/mo come from [platform.claude.com/dashboard](https://platform.claude.com/dashboard) (Firefox `sessionKey` for the Console org — prepaid remaining + current spend). Max/Pro **session remaining %** is a quota, not a dollar balance; it stays in the footnote. Stay logged into platform.claude.com in Firefox. If a portal is slow, the three provider cards still render (local or last-good Console dollars) instead of disappearing.
+
 ### Claude Code credits show “—” or old Console dollars
 
-The Command Center **Claude Code** card reads **credits** and **spent/mo** from the platform.claude.com dashboard (Firefox `sessionKey`, same prepaid remaining + current spend as the Console cards). Stay logged into [platform.claude.com](https://platform.claude.com/dashboard) in Firefox so Cortex can read the Console org. Claude Code OAuth (`claude /login`) still supplies Max/Pro plan + extra-usage status in the footnote. Session remaining % is only used as the credit figure when no Console dollar balance is available.
+The Command Center **Claude Code** card reads **credits** and **spent/mo** from the platform.claude.com dashboard (Firefox `sessionKey`, same prepaid remaining + current spend as the Console cards). Stay logged into [platform.claude.com](https://platform.claude.com/dashboard) in Firefox so Cortex can read the Console org. Claude Code OAuth (`claude /login`) still supplies Max/Pro plan + extra-usage status in the footnote.
 
 ### Quick Research / Deep Report skip the Python engines
 
@@ -677,6 +720,8 @@ Ensure nothing else is bound to the Cortex port, then relaunch. Use **View → T
 - [x] MCP TypeScript client with permissions, isolation, timeouts, audit  
 - [x] Embedded LanceDB index of the vault and research history  
 - [x] Quick Research (GPT Researcher) and Deep Report (GPT Researcher + PaperQA2)  
+- [x] Learning Center (HF Agent Course, LLMs from Scratch, OpenAI Cookbook, Build Your Own X, Microsoft beginner courses)  
+- [x] Video Center (Remotion, ComfyUI)  
 - [ ] SSE / WebSocket activity stream (replace polling)  
 - [ ] In-app API key management for packaged desktop  
 - [ ] Trigger graphify builds from inside Cortex (today the semantic layer is only as fresh as the last external build)  

@@ -31,6 +31,7 @@ async def main():
     payload = json.loads(sys.stdin.read() or "{}")
     query = (payload.get("query") or "").strip()
     mode = payload.get("mode") or "quick"
+    source_urls = [u for u in (payload.get("source_urls") or []) if isinstance(u, str) and u.startswith("http")][:16]
     if not query:
         print(json.dumps({"ok": False, "error": "query required"}))
         return
@@ -66,7 +67,10 @@ async def main():
         else "Write a comprehensive research report with sections: Abstract, Key findings, Evidence, Counterpoints, Recommendations. 800–1600 words. Cite sources by title/URL. Do not invent URLs."
     )
     try:
-        researcher = GPTResearcher(query=query, report_type="research_report", verbose=False)
+        kwargs = dict(query=query, report_type="research_report", verbose=False)
+        if source_urls:
+            kwargs["source_urls"] = source_urls
+        researcher = GPTResearcher(**kwargs)
         await researcher.conduct_research()
         report = await researcher.write_report(custom_prompt=prompt)
         urls = []
@@ -303,13 +307,14 @@ export async function runGptResearcher(
   query: string,
   mode: "quick" | "deep",
   timeoutMs: number,
+  sourceUrls?: string[],
 ): Promise<GptrResult> {
   const script = writeScript("cortex_gptr.py", GPTR_PY);
   try {
     const out = await spawnUv(
       ["gpt-researcher", "duckduckgo-search"],
       script,
-      { query, mode },
+      { query, mode, source_urls: (sourceUrls || []).slice(0, 16) },
       timeoutMs,
       {
         MAX_ITERATIONS: mode === "quick" ? "2" : "4",
