@@ -485,7 +485,7 @@ export async function launchProjectApp(project: Project): Promise<{
 
   try {
     await waitForHttp(probe, 90000);
-  } catch (e) {
+  } catch {
     const tail = readLogTail(logFile);
     // Kill failed server
     try {

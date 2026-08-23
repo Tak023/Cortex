@@ -6,7 +6,6 @@ import { synthesizePhaseOutput } from "../../ai/client";
 import type { PipelinePhase } from "../../types";
 import type {
   AgentAdapter,
-  AgentHealth,
   AgentInvokeRequest,
   AgentInvokeResult,
 } from "./types";

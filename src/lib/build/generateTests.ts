@@ -292,7 +292,9 @@ export function restoreConceptDrivenPage(
       const raw = fs.readFileSync(conceptPath, "utf-8");
       const m = raw.match(/export const concept[^=]*=\s*(\{[\s\S]*?\n\});/);
       if (m) {
-        // eslint-disable-next-line no-new-func
+        // Parses the generated concept literal from our own scaffold
+        // output — not user input. `no-new-func` is not enabled in this
+        // config, so a disable directive here would be inert.
         const parsed = Function(`"use strict"; return (${m[1]})`)() as {
           title?: string;
           summary?: string;
