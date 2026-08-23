@@ -1,0 +1,269 @@
+/**
+ * Headless adapter for the passthrough coding CLIs (Claude Code, Codex).
+ *
+ * Before this, these agents had no adapter: the pipeline labelled a phase
+ * "Claude Code" and then produced it with the simulation adapter, which emits
+ * a canned document. Architecture and polish phases were therefore *named*
+ * after an agent that never ran.
+ *
+ * Both CLIs expose a verified non-interactive mode, confirmed against the
+ * installed binaries rather than assumed:
+ *
+ *   claude -p --output-format json   → single JSON object with result + usage
+ *   codex exec --json                → JSONL; agent_message item + turn usage
+ *
+ * Two safety properties, both deliberate:
+ *
+ *  - **Documents, not writes.** These phases produce Markdown. Claude runs with
+ *    Write/Edit/Bash disallowed and Codex in a read-only sandbox, so a phase
+ *    that is supposed to describe the work cannot silently perform it.
+ *  - **Fleet auth policy applies.** The env is built through the same
+ *    governance that covers the embedded terminals, so a Claude run here
+ *    cannot fall through to metered API billing when a plan session exists.
+ *
+ * Server-only (child_process).
+ */
+import { spawn } from "child_process";
+import type { Agent } from "../../types";
+import { getSettings } from "../../store";
+import { detectAgentAuth } from "../governance";
+import { resolveAgentBinary } from "../resolveAgentCommand";
+import type { ExternalAgentId } from "../externalAgents";
+import { parseClaudeJson, parseCodexJsonl } from "./cliOutput";
+import type {
+  AgentAdapter,
+  AgentHealth,
+  AgentInvokeRequest,
+  AgentInvokeResult,
+} from "./types";
+
+/** Generating a full architecture document is slow; bound it generously. */
+const DEFAULT_TIMEOUT_MS = 240_000;
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+interface CliSpec {
+  external: ExternalAgentId;
+  backend: string;
+  /** Arguments for a one-shot, read-only, machine-readable run. */
+  args: string[];
+  /** When true the prompt goes on stdin rather than argv. */
+  promptOnStdin: boolean;
+  parse(stdout: string): { content: string; tokens?: number; error?: string };
+}
+
+const CLI_SPECS: Record<string, CliSpec> = {
+  "agent-claude-code": {
+    external: "claude-code",
+    backend: "claude-code",
+    args: [
+      "-p",
+      "--output-format",
+      "json",
+      // This phase writes a document. It must not touch the filesystem.
+      "--disallowed-tools",
+      "Write",
+      "Edit",
+      "NotebookEdit",
+      "Bash",
+    ],
+    promptOnStdin: true,
+    parse: parseClaudeJson,
+  },
+  "agent-codex": {
+    external: "codex",
+    backend: "codex",
+    args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"],
+    promptOnStdin: false,
+    parse: parseCodexJsonl,
+  },
+};
+
+export function isCliAgent(agent: Agent): boolean {
+  return agent.id in CLI_SPECS;
+}
+
+/** Child env with the fleet auth policy applied (see governance.ts). */
+function childEnv(external: ExternalAgentId): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
+  try {
+    const auth = detectAgentAuth(
+      external,
+      getSettings().claudeAuthPreference ?? "auto",
+    );
+    for (const key of auth.unsetEnv) delete env[key];
+  } catch {
+    /* governance unavailable — inherit as-is rather than fail the phase */
+  }
+  // Never leak the Cortex server's Next internals into a child CLI.
+  for (const k of Object.keys(env)) {
+    if (k.startsWith("__NEXT_PRIVATE_")) delete env[k];
+  }
+  // NODE_ENV is readonly on the typed ProcessEnv but still deletable at runtime;
+  // leaving it set makes child CLIs behave as if they were in a build.
+  for (const k of ["NODE_ENV", "PORT", "HOSTNAME"]) {
+    delete (env as Record<string, string | undefined>)[k];
+  }
+  return env;
+}
+
+function run(
+  command: string,
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin?: string; timeoutMs: number },
+): Promise<{ ok: boolean; stdout: string; stderr: string; detail?: string }> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, { cwd: opts.cwd, env: opts.env });
+    } catch (e) {
+      resolve({
+        ok: false,
+        stdout: "",
+        stderr: "",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    let done = false;
+    const finish = (r: { ok: boolean; detail?: string }) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ ok: r.ok, stdout, stderr, detail: r.detail });
+    };
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      finish({ ok: false, detail: `timed out after ${opts.timeoutMs}ms` });
+    }, opts.timeoutMs);
+
+    child.stdout?.on("data", (d: Buffer) => {
+      if (stdout.length < MAX_OUTPUT_BYTES) stdout += d.toString();
+    });
+    child.stderr?.on("data", (d: Buffer) => {
+      if (stderr.length < MAX_OUTPUT_BYTES) stderr += d.toString();
+    });
+    child.on("error", (e) => finish({ ok: false, detail: e.message }));
+    child.on("close", (code) =>
+      finish({ ok: code === 0, detail: code === 0 ? undefined : `exit ${code}` }),
+    );
+
+    if (opts.stdin != null) {
+      child.stdin?.write(opts.stdin);
+      child.stdin?.end();
+    } else {
+      child.stdin?.end();
+    }
+  });
+}
+
+export const cliAgentAdapter: AgentAdapter = {
+  id: "cli-agent",
+
+  supports(agent) {
+    return isCliAgent(agent);
+  },
+
+  async health(agent): Promise<AgentHealth> {
+    const spec = CLI_SPECS[agent.id];
+    if (!spec) {
+      return { ok: false, backend: "cli-agent", detail: "Not a passthrough CLI agent." };
+    }
+    const resolved = resolveAgentBinary(spec.external);
+    if (!resolved.ok || !resolved.command) {
+      return { ok: false, backend: spec.backend, detail: resolved.detail };
+    }
+    const auth = detectAgentAuth(
+      spec.external,
+      getSettings().claudeAuthPreference ?? "auto",
+    );
+    return {
+      ok: auth.mode !== "unknown",
+      backend: spec.backend,
+      endpoint: resolved.command,
+      detail:
+        auth.mode === "unknown"
+          ? `${agent.name} is installed but not signed in — ${auth.detail}`
+          : `${agent.name} ready (${auth.label})`,
+    };
+  },
+
+  async invoke(req: AgentInvokeRequest): Promise<AgentInvokeResult> {
+    const t0 = Date.now();
+    const spec = CLI_SPECS[req.agent.id];
+    if (!spec) {
+      return {
+        ok: false,
+        content: "",
+        agentId: req.agent.id,
+        backend: "cli-agent",
+        error: `No CLI spec for ${req.agent.id}`,
+      };
+    }
+
+    const resolved = resolveAgentBinary(spec.external);
+    if (!resolved.ok || !resolved.command) {
+      return {
+        ok: false,
+        content: "",
+        agentId: req.agent.id,
+        backend: spec.backend,
+        error: resolved.detail,
+      };
+    }
+
+    const system = req.systemPrompt || req.agent.config.systemPrompt || "";
+    const prompt = system ? `${system}\n\n---\n\n${req.prompt}` : req.prompt;
+    const args = spec.promptOnStdin ? spec.args : [...spec.args, prompt];
+
+    const result = await run(resolved.command, args, {
+      cwd: resolved.cwd,
+      env: childEnv(spec.external),
+      stdin: spec.promptOnStdin ? prompt : undefined,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
+
+    const latencyMs = Date.now() - t0;
+
+    if (!result.ok && !result.stdout.trim()) {
+      return {
+        ok: false,
+        content: "",
+        agentId: req.agent.id,
+        backend: spec.backend,
+        error:
+          `${req.agent.name} failed (${result.detail ?? "unknown"})` +
+          (result.stderr.trim() ? `: ${result.stderr.trim().slice(0, 300)}` : ""),
+        usage: { latencyMs },
+      };
+    }
+
+    const parsed = spec.parse(result.stdout);
+    if (parsed.error || !parsed.content) {
+      return {
+        ok: false,
+        content: "",
+        agentId: req.agent.id,
+        backend: spec.backend,
+        error: parsed.error || `${req.agent.name} returned an empty document.`,
+        usage: { latencyMs },
+      };
+    }
+
+    return {
+      ok: true,
+      content: parsed.content,
+      agentId: req.agent.id,
+      backend: spec.backend,
+      model: req.agent.model,
+      usage: { tokens: parsed.tokens, latencyMs },
+    };
+  },
+};

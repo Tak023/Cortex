@@ -613,156 +613,59 @@ export function synthesizePhaseOutput(
     .map(([k, v]) => `### ${k}\n${v.slice(0, 400)}`)
     .join("\n\n");
 
+  /**
+   * Fallback documents, used only when no live agent produced the phase.
+   *
+   * These were previously demo copy describing Cortex itself — an
+   * "architecture" for a portfolio site would announce an Agent Registry and
+   * an Orchestrator, because the template named Cortex's own modules whatever
+   * the project was. That is worse than a placeholder: it is confident,
+   * well-formatted content about different software.
+   *
+   * They now derive strictly from the concept, assert nothing that was not
+   * supplied, and open with a banner saying no agent wrote them.
+   */
+  const banner =
+    "> **Template fallback — not agent output.** No live agent was available " +
+    "for this phase, so Cortex generated this outline from the concept. " +
+    "Connect an agent with a live adapter (Settings › Agents) to replace it.";
+
+  const conceptBlock = `## Concept\n${conceptSummary || "_none supplied_"}`;
+  const priorBlock = `## Prior phases\n${prior || "_none_"}`;
+
   const templates: Record<
     string,
     { summary: string; artifactName: string; content: string }
   > = {
     research: {
-      summary: `Research complete for "${projectName}": users, constraints, and competitive landscape mapped.`,
-      artifactName: "research-brief.md",
-      content: `# Research Brief — ${projectName}
-
-## Problem
-${conceptSummary}
-
-## Users
-- Primary: builders who orchestrate multiple AI agents
-- Secondary: solo developers wanting a command center
-
-## Constraints
-- Local-first preferred
-- Hybrid cloud + local models
-- Human-in-the-loop gates required
-
-## Findings
-- Fragmented tooling across Claude Code, Codex, Hermes, Grok, LM Studio
-- Strong demand for shared project memory and visible handoffs
-- Approval gates reduce runaway agent costs
-
-## Prior context
-${prior || "_none_"}
-`,
+      summary: `Research outline generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "research.md",
+      content: `# Research — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Questions this phase should answer\n- Who is this for, and what do they do today instead?\n- What constraints are fixed (platform, budget, data, timeline)?\n- What does success look like, measurably?\n- What comparable products exist, and where do they fall short?\n\n${priorBlock}\n`,
     },
     planning: {
-      summary: `Execution plan drafted with milestones, risks, and success metrics for "${projectName}".`,
-      artifactName: "execution-plan.md",
-      content: `# Execution Plan — ${projectName}
-
-## Goal
-${conceptSummary}
-
-## Milestones
-1. Scaffold workspace & agent registry
-2. Ideas → concepts flow
-3. Pipeline orchestration with approval gates
-4. Project Kanban + live activity
-5. Export & usage tracking
-
-## Risks
-- Agent CLI availability varies
-- API rate limits on cloud agents
-- Context drift across phases
-
-## Success metrics
-- Concept generation < 30s
-- Full pipeline visible on Kanban
-- Human can pause/reassign mid-flight
-
-## Depends on research
-${memory.research?.slice(0, 300) || "_pending_"}
-`,
+      summary: `Execution outline generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "planning.md",
+      content: `# Execution Plan — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Suggested milestones\n1. Define the smallest end-to-end slice that delivers the core value\n2. Build that slice\n3. Validate it against the success criteria from research\n4. Extend feature by feature, in priority order\n\n## Risks to resolve before building\n- Unstated assumptions in the concept\n- Dependencies not yet chosen or verified\n- Anything requiring credentials or third-party access\n\n${priorBlock}\n`,
     },
     architecture: {
-      summary: `System architecture defined: modules, data model, and agent routing for "${projectName}".`,
+      summary: `Architecture outline generated for "${projectName}" (template fallback — no agent ran).`,
       artifactName: "architecture.md",
-      content: `# Architecture — ${projectName}
-
-## Overview
-Local-first control plane with Next.js UI, file-backed state, and an in-process orchestration engine.
-
-## Modules
-- **Agent Registry** — status, strengths, config
-- **Router** — phase → best agent
-- **Orchestrator** — task graph, handoffs, approvals
-- **Workspace** — shared memory, artifacts, history
-- **Activity Bus** — real-time feed
-
-## Data model
-Agent, Idea, Concept, Project, Task, Artifact, ActivityEvent, UsageRecord
-
-## Handoff protocol
-Each phase writes artifacts into shared memory; next phase reads prior keys.
-
-## Prior
-${memory.planning?.slice(0, 300) || memory.research?.slice(0, 300) || "_none_"}
-`,
+      content: `# Architecture — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## What this document should contain\n- Component breakdown for *this* project, with responsibilities\n- Data model and where state lives\n- External interfaces and their contracts\n- Build, run and deploy shape\n- Decisions taken, with the alternatives rejected and why\n\nCortex cannot infer these from a concept summary alone; a live agent should write them.\n\n${priorBlock}\n`,
     },
     implementation: {
-      summary: `Core implementation for "${projectName}" scaffolded with primary flows wired.`,
-      artifactName: "implementation-notes.md",
-      content: `# Implementation Notes — ${projectName}
-
-## Delivered
-- UI shell with sidebar navigation
-- Agents panel with status & actions
-- Ideas → Generate Concepts → select
-- Project workspace with Kanban
-- Orchestration tick loop with approvals
-
-## Key files
-- \`src/lib/orchestration/engine.ts\`
-- \`src/lib/agents/router.ts\`
-- \`src/lib/store.ts\`
-- \`src/app/ideas/page.tsx\`
-- \`src/app/projects/[id]/page.tsx\`
-
-## Follow-ups
-- Wire real CLI adapters for Hermes / Claude Code / Codex
-- Stream SSE for activity feed
-`,
+      summary: `Implementation notes generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "implementation.md",
+      content: `# Implementation — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Note on scope\nCortex scaffolds a starter application from the concept — project name, summary, feature list and stack. It does **not** generate feature code, assets, branding or icons. Everything described in the concept beyond that scaffold still needs to be built.\n\n${priorBlock}\n`,
     },
     testing: {
-      summary: `Test plan executed for "${projectName}"; critical paths green with notes.`,
-      artifactName: "test-report.md",
-      content: `# Test Report — ${projectName}
-
-## Coverage
-- Concept generation (mock + live path)
-- Project creation from concept
-- Task transitions & approval gates
-- Agent status updates during run
-- Pause / resume / reassign
-
-## Results
-| Area | Status |
-|------|--------|
-| Ideas flow | PASS |
-| Routing | PASS |
-| Kanban | PASS |
-| Approvals | PASS |
-| Export | PASS |
-
-## Notes
-Simulation mode validates coordination without requiring all API keys.
-`,
+      summary: `Test outline generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "testing.md",
+      content: `# Testing — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Coverage this project needs\n- One test per feature listed in the concept\n- The critical end-to-end path a user actually follows\n- Failure and empty states\n\nThe generated scaffold ships smoke tests for itself only; they do not cover the concept's features.\n\n${priorBlock}\n`,
     },
     polish: {
-      summary: `Polish pass complete for "${projectName}": UX, copy, empty states, and export ready.`,
+      summary: `Release outline generated for "${projectName}" (template fallback — no agent ran).`,
       artifactName: "release-notes.md",
-      content: `# Release Notes — ${projectName}
-
-## Highlights
-- Dark command-center UI
-- Multi-agent concept brainstorm
-- Live pipeline with human gates
-- Project workspace + history export
-
-## Concept
-${conceptSummary}
-
-## Ready for
-Local demo, further agent adapter integration, and real API keys via Settings.
-`,
+      content: `# Release Notes — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Before calling this shippable\n- Every feature in the concept is implemented, not just scaffolded\n- Empty, loading and error states exist\n- Copy has been read end to end\n- Assets referenced by the concept (branding, icons, images) actually exist\n\n${priorBlock}\n`,
     },
   };
 

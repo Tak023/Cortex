@@ -41,16 +41,19 @@ const PHASE_META: Record<
     minutes: 12,
   },
   implementation: {
-    title: "Implementation",
+    title: "Implementation (scaffold only)",
     description:
-      "Cortex scaffolds a real app and runs install + build smoke (agent label is ownership only).",
+      "Cortex scaffolds a starter app from the concept — name, summary, feature list and stack — " +
+      "then runs install + build smoke. No model writes code here, and no assets, branding or " +
+      "icons are generated. Feature code described in the concept still has to be built.",
     requiresApproval: false,
     minutes: 25,
   },
   testing: {
-    title: "Testing",
+    title: "Testing (scaffold smoke)",
     description:
-      "Cortex runs install → build → Vitest (Playwright when available). Agent label is ownership only.",
+      "Cortex runs install → build → Vitest (Playwright when available) against the scaffold. " +
+      "These are smoke tests for the generated starter, not coverage of the concept's features.",
     requiresApproval: false,
     minutes: 18,
   },

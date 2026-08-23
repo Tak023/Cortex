@@ -701,11 +701,14 @@ ${project.concept.summary}
       role: "agent",
       agentId: t.agentId ?? undefined,
       content:
-        `**App scaffolded & build smoke passed.**\n\n` +
+        `**Starter app scaffolded & build smoke passed.**\n\n` +
         `1. Click **Launch app** on this project page\n` +
         `2. Or Terminal:\n\`\`\`\n${result.runHint}\n\`\`\`\n` +
         `3. Folder: \`${result.appDir}\`\n\n` +
-        `Testing will run Vitest (and Playwright when available).`,
+        `⚠️ **What this is:** a starter page rendering the concept's title, summary, ` +
+        `feature list and stack — not an implementation of those features. Cortex does ` +
+        `not generate feature code, images, branding or icons in this phase. Use the ` +
+        `architecture doc in \`../artifacts\` and an agent terminal to build the rest.`,
       createdAt: new Date().toISOString(),
     });
 
@@ -1284,8 +1287,10 @@ function applyPhaseCompletion(
     // Price the run against the agent's actual cost tier rather than a flat
     // per-token guess: local and plan-covered work is $0 at the margin, and
     // only real spend may consume a budget.
+    // A simulated run is not on-device inference — labelling it "free-local"
+    // would attribute template synthesis to a real local model.
     const { costUsd, tier } = simulated
-      ? { costUsd: 0, tier: "free-local" }
+      ? { costUsd: 0, tier: "simulated" }
       : costForRun(task.agentId, output.tokens);
 
     pushUsage({
