@@ -66,9 +66,13 @@ function defaultSettings(): AppSettings {
     agentWorkspaceDir: "",
     claudeAuthPreference: "auto",
     showSeededMetrics: true,
-    // Routing defaults to the historical behaviour so upgrading does not
-    // silently move work to a different agent. Opt in from Settings.
-    routingPolicy: "quality-first",
+    // Cost-aware by default: with the LM Studio adapter live, the six
+    // on-device models can actually take work, and quality-first would send
+    // every phase to a paid lane regardless of what the cheap ones have
+    // proven. Still evidence-gated — a local model only takes a class after
+    // measured success on it, so this changes routing gradually rather than
+    // all at once.
+    routingPolicy: "cost-aware",
     routingMinSuccessRate: 0.7,
     routingMinAttempts: 3,
     routingExploreUnproven: true,
