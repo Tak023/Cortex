@@ -6,6 +6,7 @@ import type {
   AppSettings,
   AppState,
   Idea,
+  MetricsSource,
   Project,
   UsageRecord,
 } from "./types";
@@ -60,6 +61,19 @@ function defaultSettings(): AppSettings {
     defaultLocalModel:
       "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit",
     voiceInputMode: "auto",
+    agentApprovalPolicy: "inherit",
+    agentWorkspaceScope: "project",
+    agentWorkspaceDir: "",
+    claudeAuthPreference: "auto",
+    showSeededMetrics: true,
+    // Routing defaults to the historical behaviour so upgrading does not
+    // silently move work to a different agent. Opt in from Settings.
+    routingPolicy: "quality-first",
+    routingMinSuccessRate: 0.7,
+    routingMinAttempts: 3,
+    routingExploreUnproven: true,
+    dailyBudgetUsd: null,
+    projectBudgetUsd: null,
     vaultEnabled: true,
     vaultDir:
       process.env.CORTEX_VAULT_DIR || "~/Documents/hermes-second-brain",
@@ -215,6 +229,26 @@ export function getAgent(id: string): Agent | undefined {
   return load().agents.find((a) => a.id === id);
 }
 
+const SOURCE_RANK: Record<MetricsSource, number> = {
+  seeded: 0,
+  simulated: 1,
+  measured: 2,
+};
+
+/**
+ * Provenance only ever improves. Once an agent has produced a real
+ * measurement, a later simulated run must not relabel its tile as fake — and
+ * a seeded placeholder must never silently be promoted without evidence.
+ */
+function mergeMetricsSource(
+  prev: MetricsSource | undefined,
+  next: MetricsSource | undefined,
+): MetricsSource {
+  const before = prev ?? "seeded";
+  if (!next) return before;
+  return SOURCE_RANK[next] > SOURCE_RANK[before] ? next : before;
+}
+
 export function updateAgent(
   id: string,
   patch: Partial<Agent>,
@@ -230,7 +264,14 @@ export function updateAgent(
         ? { ...s.agents[idx].config, ...patch.config }
         : s.agents[idx].config,
       metrics: patch.metrics
-        ? { ...s.agents[idx].metrics, ...patch.metrics }
+        ? {
+            ...s.agents[idx].metrics,
+            ...patch.metrics,
+            source: mergeMetricsSource(
+              s.agents[idx].metrics.source,
+              patch.metrics.source,
+            ),
+          }
         : s.agents[idx].metrics,
       lastSeenAt: new Date().toISOString(),
     };

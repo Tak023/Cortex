@@ -1,4 +1,25 @@
-import type { Agent, AgentRole, PipelinePhase } from "../types";
+import type {
+  Agent,
+  AgentRole,
+  PipelinePhase,
+  RoutingDecision,
+  RoutingPolicy,
+  RoutingStat,
+  UsageRecord,
+} from "../types";
+import {
+  agentCost,
+  estimateCostUsd,
+  type AgentCost,
+  type BillingHint,
+} from "./costModel";
+import {
+  LOCAL_FIRST_CLASSES,
+  TASK_CLASS_ROLES,
+  TASK_CLASS_STAKES,
+  taskClassForPhase,
+  type TaskClass,
+} from "./taskClass";
 
 const PHASE_PRIMARY_ROLES: Record<PipelinePhase, AgentRole[]> = {
   research: ["researcher", "generalist"],
@@ -135,6 +156,316 @@ export function routeAgent(
   scored.sort((a, b) => b.score - a.score);
   return scored[0]?.agent ?? null;
 }
+
+// ── Cost-aware routing ──────────────────────────────────────────────────────
+
+/** Tokens assumed for a phase before an agent has any measured history. */
+const ASSUMED_TOKENS_PER_RUN = 2000;
+
+/** Stricter bars for classes where a wrong answer is expensive to undo. */
+const STAKES_SUCCESS_FLOOR: Record<"low" | "medium" | "high", number> = {
+  low: 0.55,
+  medium: 0.7,
+  high: 0.85,
+};
+
+export interface RouteForClassInput {
+  agents: Agent[];
+  taskClass: TaskClass;
+  policy: RoutingPolicy;
+  stats: RoutingStat[];
+  usage: UsageRecord[];
+  /** Billing mode per agent id, from fleet governance. */
+  billing?: Record<string, BillingHint>;
+  minSuccessRate: number;
+  minAttempts: number;
+  exploreUnproven: boolean;
+  /** Agents excluded because they already failed this task. */
+  excludeIds?: string[];
+  /** When true, metered agents are unroutable (a budget cap is spent). */
+  meteredBlocked?: boolean;
+  /** Phase used for the curated fallback ranking. */
+  phase: PipelinePhase | "brainstorm";
+}
+
+type Candidate = {
+  agent: Agent;
+  cost: AgentCost;
+  stat: RoutingStat | null;
+  successRate: number | null;
+  attempts: number;
+  proven: boolean;
+  capable: boolean;
+  /** Curated quality rank for the phase — lower is better, 99 = unranked. */
+  specialistRank: number;
+  estimatedCostUsd: number;
+};
+
+function clearsBar(
+  c: Candidate,
+  taskClass: TaskClass,
+  minSuccessRate: number,
+): boolean {
+  if (c.successRate == null) return false;
+  const floor = Math.max(
+    minSuccessRate,
+    STAKES_SUCCESS_FLOOR[TASK_CLASS_STAKES[taskClass]],
+  );
+  return c.successRate >= floor;
+}
+
+function isCapable(agent: Agent, taskClass: TaskClass): boolean {
+  const roles = TASK_CLASS_ROLES[taskClass] ?? [];
+  if (!roles.length) return true;
+  return agent.roles.some((r) => roles.includes(r));
+}
+
+function cheapestFirst(a: Candidate, b: Candidate): number {
+  if (a.cost.rank !== b.cost.rank) return a.cost.rank - b.cost.rank;
+  if (a.estimatedCostUsd !== b.estimatedCostUsd) {
+    return a.estimatedCostUsd - b.estimatedCostUsd;
+  }
+  // Same price: prefer the better-evidenced agent, then the curated specialist.
+  const ar = a.successRate ?? -1;
+  const br = b.successRate ?? -1;
+  if (ar !== br) return br - ar;
+  return a.specialistRank - b.specialistRank;
+}
+
+/**
+ * Pick an agent for a task class under the active policy.
+ *
+ * `quality-first` reproduces the original behaviour exactly. The cost-aware
+ * policies walk candidates cheapest-first and take the first one that has
+ * *proven* it can do this class, falling back to the curated specialist when
+ * nothing cheap has earned the work yet. Nothing is ever routed to a cheap
+ * agent on the strength of a seeded number — only real attempts count.
+ */
+export function routeForClass(input: RouteForClassInput): RoutingDecision {
+  const {
+    agents,
+    taskClass,
+    policy,
+    stats,
+    usage,
+    billing = {},
+    minSuccessRate,
+    minAttempts,
+    exploreUnproven,
+    excludeIds = [],
+    meteredBlocked = false,
+    phase,
+  } = input;
+
+  const preferred = PHASE_PREFERRED_AGENT_IDS[phase] ?? [];
+  const pool = agents.filter(
+    (a) => a.config.enabled && !excludeIds.includes(a.id),
+  );
+
+  const candidates: Candidate[] = pool.map((agent) => {
+    const cost = agentCost(agent, usage, billing[agent.id]);
+    const stat =
+      stats.find((s) => s.agentId === agent.id && s.taskClass === taskClass) ??
+      null;
+    const attempts = stat?.attempts ?? 0;
+    const successRate = attempts > 0 ? stat!.successes / attempts : null;
+    const perRunTokens =
+      attempts > 0 && stat!.totalTokens > 0
+        ? stat!.totalTokens / attempts
+        : ASSUMED_TOKENS_PER_RUN;
+    const specialistIdx = preferred.indexOf(agent.id);
+    return {
+      agent,
+      cost,
+      stat,
+      successRate,
+      attempts,
+      proven: attempts >= minAttempts,
+      capable: isCapable(agent, taskClass),
+      specialistRank: specialistIdx === -1 ? 99 : specialistIdx,
+      estimatedCostUsd: estimateCostUsd(cost, perRunTokens),
+    };
+  });
+
+  const byId = new Map(candidates.map((c) => [c.agent.id, c]));
+  const rejected: RoutingDecision["rejected"] = [];
+
+  const routable = candidates.filter((c) => {
+    if (meteredBlocked && c.cost.tier === "metered") {
+      rejected.push({
+        agentId: c.agent.id,
+        name: c.agent.name,
+        reason: "budget cap spent — metered agents are blocked",
+      });
+      return false;
+    }
+    if (c.agent.status === "error") {
+      rejected.push({
+        agentId: c.agent.id,
+        name: c.agent.name,
+        reason: "agent is in an error state",
+      });
+      return false;
+    }
+    return true;
+  });
+
+  // Escalation ladder: everything routable, cheapest first. A failure walks
+  // one rung up rather than retrying the same agent that just failed.
+  const ladder = [...routable].sort(cheapestFirst);
+  const escalationPath = ladder.map((c) => c.agent.id);
+
+  /**
+   * Curated ranking is only ever applied to agents that survived the routable
+   * filter. Handing `routeAgent` the raw pool would let the quality ranking
+   * re-select a metered agent after a spent budget had excluded it — turning
+   * the hard stop into a suggestion.
+   */
+  const routablePool = routable.map((c) => c.agent);
+
+  const decide = (
+    agentId: string | null,
+    reason: string,
+  ): RoutingDecision => {
+    const c = agentId ? byId.get(agentId) : null;
+    const report = budgetlessDecision(
+      c,
+      taskClass,
+      policy,
+      reason,
+      rejected,
+      escalationPath,
+      meteredBlocked,
+    );
+    return report;
+  };
+
+  if (!routable.length) {
+    return decide(
+      null,
+      meteredBlocked
+        ? "No agent available: every candidate is metered and the budget cap is spent."
+        : "No enabled agent is available for this class.",
+    );
+  }
+
+  if (policy === "quality-first") {
+    const best = routeAgent(routablePool, phase, excludeIds);
+    return decide(
+      best?.id ?? ladder[0].agent.id,
+      meteredBlocked
+        ? "Quality-first, but a spend cap is exhausted — best agent that is still free to run."
+        : "Quality-first: curated specialist for this phase, cost not considered.",
+    );
+  }
+
+  const localFirst = policy === "local-first";
+
+  // 1. Cheapest agent that has *proven* it can do this class.
+  for (const c of ladder) {
+    if (!c.capable) {
+      rejected.push({
+        agentId: c.agent.id,
+        name: c.agent.name,
+        reason: `no role suited to ${taskClass}`,
+      });
+      continue;
+    }
+    if (!c.proven) {
+      rejected.push({
+        agentId: c.agent.id,
+        name: c.agent.name,
+        reason: `unproven on ${taskClass} (${c.attempts}/${minAttempts} runs)`,
+      });
+      continue;
+    }
+    if (!clearsBar(c, taskClass, minSuccessRate)) {
+      rejected.push({
+        agentId: c.agent.id,
+        name: c.agent.name,
+        reason: `${Math.round((c.successRate ?? 0) * 100)}% success on ${taskClass} is below the bar`,
+      });
+      continue;
+    }
+    return decide(
+      c.agent.id,
+      `${c.cost.tier === "metered" ? "Cheapest" : "Free"} agent proven on ${taskClass}: ` +
+        `${Math.round((c.successRate ?? 0) * 100)}% over ${c.attempts} runs.`,
+    );
+  }
+
+  // 2. Nothing has proven itself. Optionally let a free agent try a low-stakes
+  //    class so the router can ever acquire evidence — exploration is only
+  //    allowed where a bad answer is cheap to throw away.
+  if (
+    exploreUnproven &&
+    (TASK_CLASS_STAKES[taskClass] === "low" ||
+      (localFirst && LOCAL_FIRST_CLASSES.includes(taskClass)))
+  ) {
+    const explorer = ladder.find(
+      (c) => c.capable && c.cost.tier === "free-local" && c.agent.status !== "offline",
+    );
+    if (explorer) {
+      return decide(
+        explorer.agent.id,
+        `Exploring: ${explorer.agent.name} is unproven on ${taskClass}, but the class is low-stakes ` +
+          `and a local run is free. Escalates on failure.`,
+      );
+    }
+  }
+
+  // 3. Fall back to the curated specialist — with the cheap agents recorded as
+  //    rejected so the Orchestration page can show why.
+  const best = routeAgent(routablePool, phase, excludeIds);
+  const chosen = best && byId.get(best.id) ? best.id : ladder[0].agent.id;
+  return decide(
+    chosen,
+    meteredBlocked
+      ? `No cheaper agent has cleared the bar on ${taskClass}, and a spend cap blocks the paid ones — using the best free agent.`
+      : `No cheaper agent has cleared the bar on ${taskClass} yet — using the curated specialist.`,
+  );
+}
+
+function budgetlessDecision(
+  c: Candidate | null | undefined,
+  taskClass: TaskClass,
+  policy: RoutingPolicy,
+  reason: string,
+  rejected: RoutingDecision["rejected"],
+  escalationPath: string[],
+  budgetBlocked: boolean,
+): RoutingDecision {
+  return {
+    agentId: c?.agent.id ?? null,
+    agentName: c?.agent.name ?? "Unassigned",
+    taskClass,
+    policy,
+    costTier: c?.cost.tier ?? "unknown",
+    successRate: c?.successRate ?? null,
+    attempts: c?.attempts ?? 0,
+    reason,
+    rejected,
+    escalationPath,
+    estimatedCostUsd: c?.estimatedCostUsd ?? 0,
+    budgetBlocked,
+  };
+}
+
+/**
+ * Next agent to try after `failedAgentIds` have failed this task — one rung up
+ * the escalation ladder, never the agent that just failed.
+ */
+export function escalateFrom(
+  decision: RoutingDecision,
+  failedAgentIds: string[],
+): string | null {
+  for (const id of decision.escalationPath) {
+    if (!failedAgentIds.includes(id)) return id;
+  }
+  return null;
+}
+
+export { taskClassForPhase };
 
 /** Select a diverse team for collaborative brainstorming */
 export function routeBrainstormTeam(agents: Agent[], count = 3): Agent[] {

@@ -11,6 +11,8 @@ import {
 function TerminalInner() {
   const params = useSearchParams();
   const agent = (params.get("agent") || "").trim() as ExternalAgentId;
+  /** Optional per-session workspace override; otherwise fleet scope applies. */
+  const cwd = params.get("cwd")?.trim() || undefined;
   const meta = useMemo(
     () => EXTERNAL_AGENTS.find((a) => a.id === agent),
     [agent],
@@ -24,7 +26,7 @@ function TerminalInner() {
     );
   }
 
-  return <AgentTerminal agent={meta.id} label={meta.label} />;
+  return <AgentTerminal agent={meta.id} label={meta.label} cwd={cwd} />;
 }
 
 export default function AgentTerminalPage() {

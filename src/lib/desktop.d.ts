@@ -28,6 +28,12 @@ declare global {
           agent: string;
           cols: number;
           rows: number;
+          /** Workspace scope resolved by the Cortex server. */
+          cwd?: string;
+          /** Approval-policy flags the server verified against the CLI. */
+          extraArgs?: string[];
+          /** Env keys to drop so the intended credential wins. */
+          unsetEnv?: string[];
         }) => Promise<{
           ok: boolean;
           detail?: string;
@@ -35,6 +41,7 @@ declare global {
             id: string;
             display: string;
             label: string;
+            cwd?: string;
           };
         }>;
         write: (id: string, data: string) => Promise<{ ok: boolean }>;

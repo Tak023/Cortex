@@ -16,6 +16,7 @@ import {
   resolveMcpLaunch,
   resolveRivalSearchDir,
 } from "./catalog";
+import { consumeGrant } from "./grants";
 import { getAgentPolicy, isToolAllowed } from "./permissions";
 import {
   DEFAULT_MCP_TIMEOUTS,
@@ -351,7 +352,10 @@ export async function callMcpTool(opts: {
 
   const policy = policyFor(agentId, serverId);
   const allowed = isToolAllowed(policy, tool);
-  if (!allowed.ok) {
+  // A "grant once" from the denial prompt overrides the standing policy for
+  // exactly this call, and is consumed here.
+  const granted = allowed.ok ? false : consumeGrant(agentId, serverId, tool);
+  if (!allowed.ok && !granted) {
     const entry = appendAudit({
       agentId,
       serverId,
@@ -363,13 +367,24 @@ export async function callMcpTool(opts: {
       error: allowed.reason,
     });
     pushActivity({
-      type: "error",
-      message: `MCP denied: ${agentId} → ${serverId}/${tool}`,
+      type: "approval_needed",
+      message: `MCP denied: ${agentId} → ${serverId}/${tool} — grant or deny on the MCP page`,
       agentId,
     });
-    const err = new Error(allowed.reason);
-    (err as Error & { auditId?: string }).auditId = entry.id;
+    const err = new Error(allowed.reason) as Error & {
+      auditId?: string;
+      denied?: { agentId: string; serverId: McpServerId; tool: string; mode: string };
+    };
+    err.auditId = entry.id;
+    err.denied = { agentId, serverId, tool, mode: policy.mode };
     throw err;
+  }
+  if (granted) {
+    pushActivity({
+      type: "approval_resolved",
+      message: `MCP one-time grant used: ${agentId} → ${serverId}/${tool}`,
+      agentId,
+    });
   }
 
   if (serverId === "lancedb") {

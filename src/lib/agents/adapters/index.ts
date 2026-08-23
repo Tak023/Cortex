@@ -6,6 +6,7 @@
 import type { Agent } from "../../types";
 import { getAgents } from "../../store";
 import { jarvisAdapter, isJarvisAgent } from "./jarvis";
+import { lmStudioAdapter, isLmStudioAgent } from "./lmstudio";
 import { simulationAdapter } from "./simulation";
 import type {
   AgentAdapter,
@@ -23,13 +24,20 @@ export type {
   AgentInvokeResult,
 } from "./types";
 export { isJarvisAgent, JARVIS_AGENT_IDS } from "./jarvis";
+export { isLmStudioAgent } from "./lmstudio";
 
 /** Ordered adapters (first match wins). Add new integrations here. */
 const ADAPTERS: AgentAdapter[] = [
   jarvisAdapter,
-  // Future: claudeCodeAdapter, codexAdapter, hermesAdapter, lmStudioAdapter
+  lmStudioAdapter,
+  // Future: claudeCodeAdapter, codexAdapter, hermesAdapter
   simulationAdapter,
 ];
+
+/** True when this agent has a real runtime rather than the simulator. */
+export function hasLiveAdapter(agent: Agent): boolean {
+  return isJarvisAgent(agent) || isLmStudioAgent(agent);
+}
 
 export function listAdapters(): AgentAdapter[] {
   return [...ADAPTERS];

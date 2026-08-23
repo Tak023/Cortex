@@ -45,7 +45,20 @@ export interface AgentMetrics {
   successRate: number;
   tasksCompleted: number;
   tasksFailed: number;
+  /**
+   * Where these numbers came from. Registry defaults ship as "seeded" so a
+   * demo tile can never be mistaken for a measurement; the first real
+   * invocation flips the agent to "measured".
+   */
+  source?: MetricsSource;
 }
+
+/**
+ * - seeded:    registry placeholder, never observed
+ * - simulated: produced by the simulation adapter, not a real model call
+ * - measured:  observed from a live agent invocation
+ */
+export type MetricsSource = "seeded" | "simulated" | "measured";
 
 export interface Agent {
   id: string;
@@ -72,6 +85,12 @@ export interface AgentConfig {
   toolAccess: string[];
   modelOverride?: string;
   maxConcurrent: number;
+  /**
+   * Operator-declared price in USD per 1k tokens, used to break ties inside
+   * the metered cost tier. Left unset by default — Cortex will not invent a
+   * price it cannot verify.
+   */
+  costPer1kUsd?: number;
   /**
    * Adapter-specific options (e.g. OpenJarvis agent name, base URL override).
    * Kept open so future integrations don't need schema migrations.
@@ -135,6 +154,13 @@ export interface Task {
   maxRetries?: number;
   /** Last error message when status is failed or during recovery */
   lastError?: string | null;
+  /**
+   * Agents that already failed this task. The router escalates past them
+   * instead of retrying the agent that just failed.
+   */
+  failedAgentIds?: string[];
+  /** Why the router chose the current agent — shown in the project timeline. */
+  routingReason?: string | null;
 }
 
 export interface ProjectMessage {
@@ -219,12 +245,83 @@ export interface UsageRecord {
   agentId: string;
   projectId?: string;
   tokens: number;
+  /**
+   * Marginal USD cost. Zero for local models and for work covered by a
+   * subscription — only metered usage consumes a budget.
+   */
   costUsd: number;
   latencyMs: number;
   createdAt: string;
+  /** Task class this run served, so spend can be attributed to a lane. */
+  taskClass?: TaskClass;
+  /** Cost tier at dispatch time, for auditing routing decisions. */
+  costTier?: string;
+}
+
+/** Re-exported from ./agents/taskClass so state types stay in one file. */
+export type TaskClass = import("./agents/taskClass").TaskClass;
+
+/**
+ * Outcome history for one (agent, task class) pair — the evidence the router
+ * uses to decide whether a cheaper agent is allowed to take a class.
+ */
+export interface RoutingStat {
+  agentId: string;
+  taskClass: TaskClass;
+  /** Real (non-simulated) attempts. */
+  attempts: number;
+  successes: number;
+  /** Simulated runs, tracked separately and never used for routing. */
+  simulatedAttempts: number;
+  totalTokens: number;
+  totalLatencyMs: number;
+  totalCostUsd: number;
+  lastAt: string;
+  lastError: string | null;
+}
+
+/**
+ * - quality-first: curated specialist wins, cost ignored (pre-0.2.12 behaviour)
+ * - cost-aware:    cheapest agent that clears the success bar, escalate on failure
+ * - local-first:   as cost-aware, but a local model must fail before paid work
+ */
+export type RoutingPolicy = "quality-first" | "cost-aware" | "local-first";
+
+/** One resolved routing decision, kept for display and for audit. */
+export interface RoutingDecision {
+  agentId: string | null;
+  agentName: string;
+  taskClass: TaskClass;
+  policy: RoutingPolicy;
+  costTier: string;
+  /** Observed success rate on this class, or null when unproven. */
+  successRate: number | null;
+  attempts: number;
+  /** Why this agent and not the others. */
+  reason: string;
+  /** Agents that were considered and rejected, cheapest first. */
+  rejected: Array<{ agentId: string; name: string; reason: string }>;
+  /** Escalation ladder if this agent fails, cheapest to most expensive. */
+  escalationPath: string[];
+  estimatedCostUsd: number;
+  budgetBlocked: boolean;
 }
 
 export type VoiceInputMode = "auto" | "builtin" | "external";
+
+/**
+ * One fleet-wide approval posture, translated into each CLI's own flags at
+ * launch. "inherit" keeps whatever the CLI defaults to (the pre-0.2.12
+ * behaviour, where Claude Code sat in manual mode and Grok in always-approve
+ * purely by accident).
+ */
+export type AgentApprovalPolicy = "inherit" | "read-only" | "ask" | "auto";
+
+/** How much of the filesystem an embedded agent terminal can see. */
+export type AgentWorkspaceScope = "project" | "custom" | "home";
+
+/** Which credential wins when an agent has both a plan session and an API key. */
+export type ClaudeAuthPreference = "auto" | "subscription" | "api-key";
 
 /** OpenJarvis default agent modes (see jarvis ask -a …) */
 export type JarvisAgentMode =
@@ -248,6 +345,41 @@ export interface AppSettings {
    * - external: Whisperflow / macOS Dictation / system VTT
    */
   voiceInputMode: VoiceInputMode;
+
+  // ── Fleet governance (embedded agent terminals) ──
+  /** Fleet-wide approval posture applied to every CLI that supports one. */
+  agentApprovalPolicy: AgentApprovalPolicy;
+  /** Filesystem scope for embedded terminals. */
+  agentWorkspaceScope: AgentWorkspaceScope;
+  /** Directory used when scope is "custom" (or as the project fallback). */
+  agentWorkspaceDir: string;
+  /** Which Claude credential wins when a plan session and an API key coexist. */
+  claudeAuthPreference: ClaudeAuthPreference;
+  /**
+   * Render registry placeholder metrics. When false, unmeasured tiles show
+   * "—" instead of a plausible-looking number.
+   */
+  showSeededMetrics: boolean;
+
+  // ── Routing policy & budgets ──
+  /** How the router trades quality against marginal cost. */
+  routingPolicy: RoutingPolicy;
+  /**
+   * Minimum observed success rate on a class before a cheaper agent may take
+   * it from the curated specialist (0–1).
+   */
+  routingMinSuccessRate: number;
+  /** Real attempts required before a success rate is trusted at all. */
+  routingMinAttempts: number;
+  /**
+   * Let an unproven cheaper agent try a low-stakes class so it can earn
+   * evidence. Without this the router can never learn anything new.
+   */
+  routingExploreUnproven: boolean;
+  /** Hard cap on metered spend per calendar day, USD. null = uncapped. */
+  dailyBudgetUsd: number | null;
+  /** Hard cap on metered spend per project, USD. null = uncapped. */
+  projectBudgetUsd: number | null;
 
   // ── Second brain (Obsidian vault) ──
   /**
@@ -312,6 +444,8 @@ export interface AppState {
   projects: Project[];
   activity: ActivityEvent[];
   usage: UsageRecord[];
+  /** Per-(agent, class) outcome history driving the router. */
+  routingStats?: RoutingStat[];
   settings: AppSettings;
   version: number;
 }

@@ -28,6 +28,7 @@ import {
   needsLiveData,
 } from "../../search/realtime";
 import { searchVault } from "../../vault/vault";
+import { matchPreferredModel } from "./modelMatch";
 import type {
   AgentAdapter,
   AgentHealth,
@@ -184,7 +185,8 @@ function resolveJarvisModel(agentModel?: string): string {
   );
 }
 
-async function listBackendModels(
+/** @internal shared with the LM Studio adapter */
+export async function listBackendModels(
   baseUrl: string,
   timeoutMs: number,
 ): Promise<string[]> {
@@ -281,22 +283,6 @@ function pickBestChatModel(
   return scored[0]?.id;
 }
 
-function matchPreferredModel(
-  preferred: string,
-  available: string[],
-): string | undefined {
-  if (!available.length) return undefined;
-  if (available.includes(preferred)) return preferred;
-  const lower = preferred.toLowerCase();
-  const exact = available.find((id) => id.toLowerCase() === lower);
-  if (exact) return exact;
-  // Substring either way (LM Studio long ids vs short tags)
-  const partial = available.find(
-    (id) =>
-      id.toLowerCase().includes(lower) || lower.includes(id.toLowerCase()),
-  );
-  return partial;
-}
 
 /**
  * Resolve a model id that the target backend actually serves.
@@ -365,7 +351,8 @@ function toolsForPhase(phase: AgentInvokeRequest["phase"]): string[] | undefined
   }
 }
 
-async function fetchWithTimeout(
+/** @internal shared with the LM Studio adapter */
+export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
@@ -392,7 +379,8 @@ function labelHttpBackend(baseUrl: string): string {
  * Prefer /v1/models (universal); fall back to /health for OpenJarvis.
  * Uses a short connect window so hung listeners do not block the whole check.
  */
-async function healthHttp(
+/** @internal shared with the LM Studio adapter */
+export async function healthHttp(
   baseUrl: string,
   timeoutMs: number,
 ): Promise<AgentHealth> {
@@ -423,6 +411,7 @@ async function healthHttp(
         ok: true,
         backend,
         detail: `Chat API reachable at ${baseUrl}`,
+        endpoint: baseUrl,
         models,
         latencyMs: Date.now() - t0,
       };
@@ -443,6 +432,7 @@ async function healthHttp(
         ok: true,
         backend,
         detail: `Health OK at ${baseUrl}`,
+        endpoint: baseUrl,
         latencyMs: Date.now() - t0,
       };
     }
@@ -450,6 +440,7 @@ async function healthHttp(
       ok: false,
       backend,
       detail: `HTTP ${res.status} from ${baseUrl}`,
+      endpoint: baseUrl,
       latencyMs: Date.now() - t0,
     };
   } catch (e) {
@@ -732,7 +723,8 @@ function buildSystemPrompt(req: AgentInvokeRequest): string {
 }
 
 /** Reject OpenJarvis/orchestrator tool-call garbage that looks like answers. */
-function isGarbageModelContent(content: string): boolean {
+/** @internal shared with the LM Studio adapter */
+export function isGarbageModelContent(content: string): boolean {
   const t = content.trim();
   if (!t) return true;
   if (/^\s*\{[\s\S]*"name"\s*:\s*"[^"]+"[\s\S]*\}\s*$/.test(t)) return true;
@@ -767,7 +759,8 @@ function isGarbageModelContent(content: string): boolean {
   return false;
 }
 
-function buildChatMessages(
+/** @internal shared with the LM Studio adapter */
+export function buildChatMessages(
   req: AgentInvokeRequest,
 ): Array<{ role: string; content: string }> {
   const system = buildSystemPrompt(req);
@@ -900,7 +893,7 @@ async function invokeDirectChat(
     model?: string;
     usage?: { total_tokens?: number };
   };
-  let content = (data.choices?.[0]?.message?.content ?? "").trim();
+  const content = (data.choices?.[0]?.message?.content ?? "").trim();
   if (isGarbageModelContent(content)) {
     throw new Error(
       `Model returned tool-call noise instead of an answer: ${content.slice(0, 120)}`,
@@ -1023,7 +1016,7 @@ async function invokeHttp(
     model?: string;
     usage?: { total_tokens?: number };
   };
-  let content =
+  const content =
     data.choices?.[0]?.message?.content?.trim() ||
     JSON.stringify(data).slice(0, 500);
 

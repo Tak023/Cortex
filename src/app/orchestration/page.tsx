@@ -2,6 +2,7 @@
 
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ActivityFeed } from "@/components/orchestration/ActivityFeed";
+import { RoutingPanel } from "@/components/orchestration/RoutingPanel";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { useActivity, useAgents, useMetrics, useProjects } from "@/lib/hooks";
@@ -48,15 +49,22 @@ export default function OrchestrationPage() {
           </Card>
           <Card>
             <CardBody className="!py-3">
-              <div className="text-xs text-muted">Fleet success</div>
+              <div
+                className="text-xs text-muted"
+                title="Averaged over agents that have actually run — registry placeholders are excluded."
+              >
+                Fleet success · measured
+              </div>
               <div className="text-2xl font-semibold tabular-nums">
-                {metrics
+                {metrics?.successRate != null
                   ? `${Math.round(metrics.successRate * 100)}%`
                   : "—"}
               </div>
             </CardBody>
           </Card>
         </div>
+
+        <RoutingPanel />
 
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
