@@ -398,7 +398,18 @@ function ensureConceptDrivenUi(
   force: boolean,
 ) {
   if (kind !== "web" && kind !== "docker") return;
-  if (!force && !isAutoRecoveredStubPage(appDir)) return;
+  // Only ever repair a genuinely broken stub.
+  //
+  // `force` used to bypass this guard, which meant the Testing phase
+  // overwrote app/page.tsx and app/layout.tsx on every run — reverting a
+  // generated application to the scaffold placeholder, then passing tests
+  // written against that placeholder and reporting success. Code generation
+  // could not survive its own pipeline.
+  //
+  // `force` means "refresh the test suites so they match the current
+  // concept". It does not mean "replace the app".
+  if (!isAutoRecoveredStubPage(appDir)) return;
+  void force;
 
   // Re-use shared restorer (also writes concept if missing)
   const dummy: Concept = {
@@ -496,27 +507,33 @@ describe("home page", () => {
     expect((heading.textContent || "").trim().length).toBeGreaterThan(0);
   });
 
-  it("renders Features section", () => {
-    render(<Page />);
-    const hits = screen.getAllByRole("heading", { name: /features/i });
-    expect(hits.length).toBeGreaterThan(0);
-  });
-
-  it("renders Stack section", () => {
-    render(<Page />);
-    const hits = screen.getAllByRole("heading", { name: /stack/i });
-    expect(hits.length).toBeGreaterThan(0);
-  });
-
-  it("body includes concept title fragment or Features", () => {
+  // Assertions describe a working page, not the scaffold's shape.
+  // Requiring "Features" and "Stack" headings only held for the placeholder,
+  // so any real implementation failed and was reverted to the placeholder to
+  // make these pass.
+  it("renders without crashing and produces content", () => {
     render(<Page />);
     const text = document.body.textContent || "";
-    const fragment = concept.title.slice(0, 12);
-    expect(
-      text.toLowerCase().includes(fragment.toLowerCase()) ||
-        /features/i.test(text) ||
-        text.trim().length > 0,
-    ).toBe(true);
+    expect(text.trim().length).toBeGreaterThan(0);
+  });
+
+  it("renders navigable or readable structure", () => {
+    render(<Page />);
+    const headings = screen.queryAllByRole("heading");
+    const links = screen.queryAllByRole("link");
+    const text = (document.body.textContent || "").trim();
+    expect(headings.length + links.length > 0 || text.length > 40).toBe(true);
+  });
+
+  it("reflects the project rather than an empty shell", () => {
+    render(<Page />);
+    const text = (document.body.textContent || "").toLowerCase();
+    const words = concept.title
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 3);
+    // Any distinctive word from the title, or simply substantial content.
+    expect(words.some((w) => text.includes(w)) || text.length > 120).toBe(true);
   });
 });
 `,

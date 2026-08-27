@@ -25,6 +25,7 @@ const ENTRYPOINTS = [
   "src/lib/agents/adapters/modelMatch.ts",
   "src/lib/agents/adapters/cliOutput.ts",
   "src/lib/build/styleCheck.ts",
+  "src/lib/build/generateTests.ts",
 ];
 
 function compile() {

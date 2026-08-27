@@ -887,7 +887,12 @@ export async function verifyAppBuild(
           rmrf(path.join(appDir, ".next"));
           rmrf(path.join(appDir, "node_modules"));
           rmrf(path.join(appDir, "package-lock.json"));
-          restoreConceptDrivenPage(appDir, opts?.concept);
+          // "generate is not a function" is a broken Next install, not a
+          // broken page. Only replace the page if it is genuinely a stub —
+          // otherwise this recovery silently discards a real implementation.
+          if (isAutoRecoveredStubPage(appDir)) {
+            restoreConceptDrivenPage(appDir, opts?.concept);
+          }
           // Ensure package pins a good next
           try {
             const p = JSON.parse(
