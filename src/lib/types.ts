@@ -380,6 +380,12 @@ export interface AppSettings {
   dailyBudgetUsd: number | null;
   /** Hard cap on metered spend per project, USD. null = uncapped. */
   projectBudgetUsd: number | null;
+  /**
+   * Let the Implementation phase run a coding agent with write access inside
+   * the project workspace. When false (or when the approval policy is
+   * read-only) the phase produces the starter scaffold only.
+   */
+  codegenEnabled: boolean;
 
   // ── Second brain (Obsidian vault) ──
   /**

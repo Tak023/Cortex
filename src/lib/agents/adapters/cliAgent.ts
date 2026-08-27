@@ -39,13 +39,68 @@ import type {
 
 /** Generating a full architecture document is slow; bound it generously. */
 const DEFAULT_TIMEOUT_MS = 240_000;
+/**
+ * Writing a feature across several files takes far longer than describing it.
+ * A measured run over a six-feature concept wrote ~40 files and ran past ten
+ * minutes, so this is set well above that rather than at it.
+ */
+const WRITE_TIMEOUT_MS = 1_500_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Write access is only ever granted inside Cortex's own generated workspace
+ * tree. A coding agent loose in the user's home directory is exactly the P0
+ * the review raised, and a pipeline is unattended — so this is asserted
+ * structurally rather than left to the caller's discipline.
+ */
+function assertContainedWorkspace(dir: string): { ok: boolean; reason?: string } {
+  if (!dir) return { ok: false, reason: "no working directory supplied" };
+  // Lazily required so this module stays importable where fs is unavailable.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require("fs") as typeof import("fs");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require("path") as typeof import("path");
+
+  let resolvedDir: string;
+  try {
+    resolvedDir = fs.realpathSync(dir);
+  } catch {
+    return { ok: false, reason: `working directory does not exist (${dir})` };
+  }
+  if (!fs.statSync(resolvedDir).isDirectory()) {
+    return { ok: false, reason: "working directory is not a directory" };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { getDataDir } = require("../../store") as typeof import("../../store");
+  let root: string;
+  try {
+    root = fs.realpathSync(path.join(getDataDir(), "workspaces"));
+  } catch {
+    return { ok: false, reason: "Cortex workspace root is missing" };
+  }
+
+  const rel = path.relative(root, resolvedDir);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return {
+      ok: false,
+      reason: `${resolvedDir} is outside the Cortex workspace root (${root})`,
+    };
+  }
+  return { ok: true };
+}
 
 interface CliSpec {
   external: ExternalAgentId;
   backend: string;
   /** Arguments for a one-shot, read-only, machine-readable run. */
   args: string[];
+  /**
+   * Arguments for a run that may write files, confined to `cwd`. Values are
+   * taken from each CLI's own `--help` enum, verified against the installed
+   * binary — a wrong value here does not degrade behaviour, it aborts launch.
+   */
+  writeArgs: string[];
   /** When true the prompt goes on stdin rather than argv. */
   promptOnStdin: boolean;
   parse(stdout: string): { content: string; tokens?: number; error?: string };
@@ -66,6 +121,16 @@ const CLI_SPECS: Record<string, CliSpec> = {
       "NotebookEdit",
       "Bash",
     ],
+    writeArgs: [
+      "-p",
+      "--output-format",
+      "json",
+      // Edits applied without prompting — there is no human in a pipeline run.
+      // Scope is the cwd the caller passes, which is asserted to be inside
+      // Cortex's own workspace tree before write mode is ever enabled.
+      "--permission-mode",
+      "acceptEdits",
+    ],
     promptOnStdin: true,
     parse: parseClaudeJson,
   },
@@ -73,10 +138,22 @@ const CLI_SPECS: Record<string, CliSpec> = {
     external: "codex",
     backend: "codex",
     args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"],
+    writeArgs: [
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+    ],
     promptOnStdin: false,
     parse: parseCodexJsonl,
   },
 };
+
+/** Agents that can write code, not just describe it. */
+export function canGenerateCode(agentId: string): boolean {
+  return agentId in CLI_SPECS;
+}
 
 export function isCliAgent(agent: Agent): boolean {
   return agent.id in CLI_SPECS;
@@ -221,13 +298,39 @@ export const cliAgentAdapter: AgentAdapter = {
 
     const system = req.systemPrompt || req.agent.config.systemPrompt || "";
     const prompt = system ? `${system}\n\n---\n\n${req.prompt}` : req.prompt;
-    const args = spec.promptOnStdin ? spec.args : [...spec.args, prompt];
+
+    // ── write mode ──────────────────────────────────────────────────────
+    // Only the code-generating phase asks for this, and only into a directory
+    // Cortex created. The containment check is here rather than only at the
+    // call site so no future caller can hand this adapter an arbitrary path.
+    const wantsWrite = req.extras?.writeAccess === true;
+    const workDir =
+      typeof req.extras?.workDir === "string" ? req.extras.workDir : "";
+    let write = false;
+    if (wantsWrite) {
+      const guard = assertContainedWorkspace(workDir);
+      if (!guard.ok) {
+        return {
+          ok: false,
+          content: "",
+          agentId: req.agent.id,
+          backend: spec.backend,
+          error: `Refusing write access: ${guard.reason}`,
+        };
+      }
+      write = true;
+    }
+
+    const baseArgs = write ? spec.writeArgs : spec.args;
+    const args = spec.promptOnStdin ? baseArgs : [...baseArgs, prompt];
+    const cwd = write ? workDir : resolved.cwd;
+    const timeoutMs = write ? WRITE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
 
     const result = await run(resolved.command, args, {
-      cwd: resolved.cwd,
+      cwd,
       env: childEnv(spec.external),
       stdin: spec.promptOnStdin ? prompt : undefined,
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutMs,
     });
 
     const latencyMs = Date.now() - t0;

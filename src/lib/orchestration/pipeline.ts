@@ -41,11 +41,12 @@ const PHASE_META: Record<
     minutes: 12,
   },
   implementation: {
-    title: "Implementation (scaffold only)",
+    title: "Implementation",
     description:
-      "Cortex scaffolds a starter app from the concept — name, summary, feature list and stack — " +
-      "then runs install + build smoke. No model writes code here, and no assets, branding or " +
-      "icons are generated. Feature code described in the concept still has to be built.",
+      "Cortex scaffolds the app skeleton, then a coding agent implements the concept's " +
+      "features into it with write access confined to the project workspace, verifying and " +
+      "repairing until the build passes. Falls back to the scaffold alone — and says so — " +
+      "when no write-capable agent is available or the approval policy forbids it.",
     requiresApproval: false,
     minutes: 25,
   },

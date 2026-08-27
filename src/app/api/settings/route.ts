@@ -52,6 +52,9 @@ export async function PATCH(req: Request) {
     ...(typeof body.showSeededMetrics === "boolean"
       ? { showSeededMetrics: body.showSeededMetrics }
       : {}),
+    ...(typeof body.codegenEnabled === "boolean"
+      ? { codegenEnabled: body.codegenEnabled }
+      : {}),
     ...(body.routingPolicy === "quality-first" ||
     body.routingPolicy === "cost-aware" ||
     body.routingPolicy === "local-first"

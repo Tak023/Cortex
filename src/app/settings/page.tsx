@@ -650,6 +650,29 @@ export default function SettingsPage() {
 
             <label className="flex items-center justify-between gap-4">
               <div>
+                <div className="text-sm">Generate feature code</div>
+                <div className="text-xs text-muted">
+                  Let the Implementation phase run a coding agent with write
+                  access <strong>inside the project workspace only</strong>, so
+                  the concept&apos;s features are built rather than listed. It
+                  verifies and repairs until the build passes, and restores the
+                  scaffold if it cannot. Requires Claude Code or Codex; disabled
+                  automatically when the approval posture is read-only.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings?.codegenEnabled !== false}
+                onChange={async (e) => {
+                  await update({ codegenEnabled: e.target.checked });
+                  flash("Saved");
+                }}
+                className="h-4 w-4 accent-blue-500"
+              />
+            </label>
+
+            <label className="flex items-center justify-between gap-4">
+              <div>
                 <div className="text-sm">Show placeholder metrics</div>
                 <div className="text-xs text-muted">
                   Registry seed and simulated values are always chipped. Turn

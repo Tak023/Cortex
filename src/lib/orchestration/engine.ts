@@ -22,6 +22,7 @@ import {
 import { ensureProjectWorkspace } from "../workspace";
 import { searchVault, writeVaultProjectNote } from "../vault/vault";
 import { scaffoldAppFromConcept } from "../build/scaffold";
+import { generateFeatureCode } from "../build/codegen";
 import { getLaunchInfo } from "../build/launch";
 import { verifyAppBuild } from "../build/verify";
 
@@ -588,7 +589,46 @@ async function runImplementationBuild(projectId: string, taskId: string) {
   try {
     const result = await scaffoldAppFromConcept(project, { runInstall: true });
     project.workspacePath = ensureProjectWorkspace(project);
-    // Re-export so app/ is included after scaffold
+
+    // The scaffold is a starting point, not the product. Hand it to a coding
+    // agent to implement the concept's features, verify, and repair.
+    const codegen = await generateFeatureCode({
+      project,
+      appDir: result.appDir,
+      agentId: task.agentId,
+      onProgress: (message) =>
+        pushActivity({
+          type: "info",
+          message,
+          projectId,
+          taskId,
+          agentId: task.agentId ?? undefined,
+        }),
+    });
+
+    if (codegen.tokens > 0 && task.agentId) {
+      recordRoutingOutcome({
+        agentId: task.agentId,
+        taskClass: "implement",
+        ok: codegen.ok,
+        tokens: codegen.tokens,
+        error: codegen.ok ? undefined : codegen.reason,
+      });
+      const { costUsd, tier } = costForRun(task.agentId, codegen.tokens);
+      pushUsage({
+        id: `use-${nanoid(8)}`,
+        agentId: task.agentId,
+        projectId: project.id,
+        tokens: codegen.tokens,
+        costUsd: Number(costUsd.toFixed(4)),
+        latencyMs: 0,
+        createdAt: new Date().toISOString(),
+        taskClass: "implement",
+        costTier: tier,
+      });
+    }
+
+    // Re-export so app/ is included after scaffold + generation
     project.workspacePath = ensureProjectWorkspace(project);
 
     // Do not hand off a broken tree to Testing
@@ -701,14 +741,24 @@ ${project.concept.summary}
       role: "agent",
       agentId: t.agentId ?? undefined,
       content:
-        `**Starter app scaffolded & build smoke passed.**\n\n` +
+        (codegen.ok
+          ? `**App built & verified.**\n\n` +
+            `${agentName(task.agentId)} implemented the concept's features on top of the ` +
+            `scaffold: ${codegen.filesChanged.length} file(s) changed` +
+            (codegen.repairRounds
+              ? `, after ${codegen.repairRounds} repair round(s)`
+              : "") +
+            `. The build passes.\n\n`
+          : `**Starter app scaffolded & build smoke passed.**\n\n` +
+            `⚠️ Feature code was *not* generated — ${codegen.reason}\n` +
+            (codegen.restoredFromSnapshot
+              ? `The working scaffold was restored, so the app still runs.\n`
+              : "") +
+            `What you have is a starter page rendering the concept's title, summary, ` +
+            `feature list and stack.\n\n`) +
         `1. Click **Launch app** on this project page\n` +
         `2. Or Terminal:\n\`\`\`\n${result.runHint}\n\`\`\`\n` +
-        `3. Folder: \`${result.appDir}\`\n\n` +
-        `⚠️ **What this is:** a starter page rendering the concept's title, summary, ` +
-        `feature list and stack — not an implementation of those features. Cortex does ` +
-        `not generate feature code, images, branding or icons in this phase. Use the ` +
-        `architecture doc in \`../artifacts\` and an agent terminal to build the rest.`,
+        `3. Folder: \`${result.appDir}\``,
       createdAt: new Date().toISOString(),
     });
 

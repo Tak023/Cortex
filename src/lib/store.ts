@@ -78,6 +78,7 @@ function defaultSettings(): AppSettings {
     routingExploreUnproven: true,
     dailyBudgetUsd: null,
     projectBudgetUsd: null,
+    codegenEnabled: true,
     vaultEnabled: true,
     vaultDir:
       process.env.CORTEX_VAULT_DIR || "~/Documents/hermes-second-brain",
