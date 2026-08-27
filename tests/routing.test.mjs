@@ -181,11 +181,26 @@ export async function run(mod) {
   {
     const d = routeForClass({ ...base, stats: [stat("agent-lmstudio-qwen", "test", 10, 10)],
       taskClass: "test", phase: "testing", policy: "cost-aware" });
-    check("ladder is cheapest-first", d.escalationPath[0] === "agent-lmstudio-qwen");
     check("escalates past the failed agent",
       escalateFrom(d, ["agent-lmstudio-qwen"]) !== "agent-lmstudio-qwen");
-    check("returns null when the ladder is exhausted",
+    check("returns null when the path is exhausted",
       escalateFrom(d, d.escalationPath) === null);
+
+    // Regression: a live run put a coder-only local model on an architecture
+    // phase after Claude Code timed out, because the escalation path was the
+    // raw cost ladder — unfiltered by capability and ordered cheapest-first.
+    const arch = routeForClass({ ...base, taskClass: "architect",
+      phase: "architecture", policy: "cost-aware" });
+    check("escalation path contains only role-capable agents",
+      !arch.escalationPath.includes("agent-lmstudio-qwen"),
+      arch.escalationPath.join(","));
+    const afterFailure = escalateFrom(arch, ["agent-claude-code"]);
+    const picked = AGENTS.find((a) => a.id === afterFailure);
+    check("escalating off Claude Code does not land on a coder-only local",
+      afterFailure !== "agent-lmstudio-qwen", `got ${afterFailure}`);
+    check("the replacement is capable of the class",
+      !picked || picked.roles.some((r) => ["architect", "planner"].includes(r)),
+      `got ${afterFailure} with roles ${picked?.roles}`);
 
     const simOnly = {
       agentId: "agent-lmstudio-qwen", taskClass: "test", attempts: 0, successes: 0,

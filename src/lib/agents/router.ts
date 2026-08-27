@@ -310,10 +310,27 @@ export function routeForClass(input: RouteForClassInput): RoutingDecision {
     return true;
   });
 
-  // Escalation ladder: everything routable, cheapest first. A failure walks
-  // one rung up rather than retrying the same agent that just failed.
+  // Cost ladder: everything routable, cheapest first. Drives the initial pick.
   const ladder = [...routable].sort(cheapestFirst);
-  const escalationPath = ladder.map((c) => c.agent.id);
+
+  /**
+   * Escalation is a *quality* decision, not a cost one. When the chosen agent
+   * fails, the next attempt should be the best remaining agent for the class —
+   * not the cheapest.
+   *
+   * Walking the cost ladder instead put a coder-only local model on an
+   * architecture phase after Claude Code timed out: the ladder was unfiltered
+   * by capability and ordered cheapest-first, so "escalate" moved *down* in
+   * both cost and competence. Only capable agents appear here, best first.
+   */
+  const escalationPath = [...routable]
+    .filter((c) => c.capable)
+    .sort((a, b) =>
+      a.specialistRank !== b.specialistRank
+        ? a.specialistRank - b.specialistRank
+        : a.cost.rank - b.cost.rank,
+    )
+    .map((c) => c.agent.id);
 
   /**
    * Curated ranking is only ever applied to agents that survived the routable

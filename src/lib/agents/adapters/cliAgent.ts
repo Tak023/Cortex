@@ -37,14 +37,19 @@ import type {
   AgentInvokeResult,
 } from "./types";
 
-/** Generating a full architecture document is slow; bound it generously. */
-const DEFAULT_TIMEOUT_MS = 240_000;
 /**
- * Writing a feature across several files takes far longer than describing it.
- * A measured run over a six-feature concept wrote ~40 files and ran past ten
- * minutes, so this is set well above that rather than at it.
+ * Generating a full architecture document is slow. Four minutes proved too
+ * tight on a real concept — Claude Code timed out and the phase re-routed to
+ * a less capable agent — so this is set well above the observed cost.
  */
-const WRITE_TIMEOUT_MS = 1_500_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
+/**
+ * Writing a feature set across dozens of files is the longest operation in the
+ * pipeline. A real run exceeded 25 minutes; generation is no longer discarded
+ * when this fires (the caller verifies whatever was written), but the ceiling
+ * is raised so a normal run does not hit it at all.
+ */
+const WRITE_TIMEOUT_MS = 2_700_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 /**

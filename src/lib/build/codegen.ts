@@ -282,18 +282,33 @@ export async function generateFeatureCode(opts: {
   tokens += first.usage?.tokens ?? 0;
 
   if (!first.ok) {
-    try {
-      restore(appDir, snapDir);
-    } catch {
-      /* scaffold may already be intact */
+    // The agent writes files as it goes, so ending early is not the same as
+    // producing nothing. A 25-minute run that hit the timeout with ~35 files
+    // on disk was previously discarded wholesale, which is a worse outcome
+    // than checking whether the work it did finish actually builds.
+    const written = diffAgainst(appDir, snapDir);
+    if (written.length === 0) {
+      try {
+        restore(appDir, snapDir);
+      } catch {
+        /* scaffold may already be intact */
+      }
+      return {
+        ...base,
+        skipped: false,
+        reason: `Code generation failed before writing anything: ${
+          first.error ?? "unknown error"
+        }`,
+        tokens,
+        restoredFromSnapshot: true,
+      };
     }
-    return {
-      ...base,
-      skipped: false,
-      reason: `Code generation failed: ${first.error ?? "unknown error"}`,
-      tokens,
-      restoredFromSnapshot: true,
-    };
+    note(
+      `Generation ended early (${first.error ?? "unknown"}) with ` +
+        `${written.length} file(s) written — verifying what is there.`,
+    );
+    // Fall through to verify and repair. If it cannot be made to build, the
+    // restore at the end still returns a working scaffold.
   }
 
   // ── verify, then repair ──────────────────────────────────────────────
