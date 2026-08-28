@@ -7,8 +7,9 @@ import fs from "fs";
 import path from "path";
 import http from "http";
 import os from "os";
-import { spawn, type ChildProcess, execFile } from "child_process";
+import { spawn, type ChildProcess, execFile, execFileSync } from "child_process";
 import { promisify } from "util";
+import { isPathInside } from "./pathContainment";
 import type { Project } from "../types";
 import { projectWorkspaceDir } from "../workspace";
 import { scaffoldAppFromConcept } from "./scaffold";
@@ -16,11 +17,31 @@ import { childProjectInstallEnv } from "./childEnv";
 
 const execFileAsync = promisify(execFile);
 
-/** Running dev servers keyed by project id */
-const running = new Map<
-  string,
-  { child: ChildProcess; url: string; appDir: string; logFile: string; startedAt: number }
->();
+type RunningApp = {
+  child: ChildProcess;
+  url: string;
+  appDir: string;
+  logFile: string;
+  startedAt: number;
+};
+
+/**
+ * Running dev servers keyed by project id.
+ *
+ * Held on globalThis, not in module scope. Launched servers are `detached`,
+ * so they outlive the Cortex process; a module-level Map is emptied by any
+ * server reload or app restart, which permanently orphans them. An orphaned
+ * server keeps serving a deleted project's old bundle from memory — a page
+ * that looks like the pipeline produced nothing, from a directory that no
+ * longer exists.
+ */
+function runningApps(): Map<string, RunningApp> {
+  const g = globalThis as typeof globalThis & {
+    __cortexLaunchedApps?: Map<string, RunningApp>;
+  };
+  if (!g.__cortexLaunchedApps) g.__cortexLaunchedApps = new Map();
+  return g.__cortexLaunchedApps;
+}
 
 export type LaunchInfo = {
   workspacePath: string;
@@ -122,7 +143,7 @@ export function getLaunchInfo(project: Project): LaunchInfo {
   const launchCommand =
     project.launchCommand ||
     (appExists ? defaultCommand(appPath, kind) : null);
-  const entry = running.get(project.id);
+  const entry = runningApps().get(project.id);
   const serverRunning = Boolean(entry);
 
   const steps: LaunchInfo["steps"] = [];
@@ -360,7 +381,7 @@ export async function launchProjectApp(project: Project): Promise<{
   }
 
   // Already running → verify then open
-  if (running.has(project.id) && url) {
+  if (runningApps().has(project.id) && url) {
     try {
       await waitForHttp(url, 5000);
       await openExternal(url);
@@ -373,7 +394,7 @@ export async function launchProjectApp(project: Project): Promise<{
         logFile,
       };
     } catch {
-      running.delete(project.id);
+      runningApps().delete(project.id);
     }
   }
 
@@ -441,7 +462,7 @@ export async function launchProjectApp(project: Project): Promise<{
     logFile,
   });
 
-  running.set(project.id, {
+  runningApps().set(project.id, {
     child,
     url: launchUrl,
     appDir,
@@ -452,7 +473,7 @@ export async function launchProjectApp(project: Project): Promise<{
   let earlyExitCode: number | null = null;
   child.on("exit", (code) => {
     earlyExitCode = code;
-    running.delete(project.id);
+    runningApps().delete(project.id);
     fs.appendFileSync(
       logFile,
       `[cortex] process exited code=${code}\n`,
@@ -497,7 +518,7 @@ export async function launchProjectApp(project: Project): Promise<{
         /* ignore */
       }
     }
-    running.delete(project.id);
+    runningApps().delete(project.id);
 
     return {
       project,
@@ -534,9 +555,76 @@ export async function launchProjectApp(project: Project): Promise<{
   };
 }
 
-export function stopLaunchedApp(projectId: string) {
-  const entry = running.get(projectId);
-  if (!entry) return false;
+/**
+ * Kill whatever is listening on `port` *if* its working directory is inside
+ * `appDir`.
+ *
+ * Reaps servers this process did not start — orphans from a previous Cortex
+ * run, which the in-memory registry cannot know about. The cwd check is what
+ * makes this safe: killing by port alone would take out an unrelated service
+ * that happens to use the same one.
+ */
+function reapOrphanServer(appDir: string, url: string | null): boolean {
+  const port = url ? Number(new URL(url).port) : NaN;
+  if (!Number.isFinite(port) || port <= 0) return false;
+
+  let pids: string[];
+  try {
+    pids = execFileSync(
+      "lsof",
+      ["-nP", `-tiTCP:${port}`, "-sTCP:LISTEN"],
+      { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] },
+    )
+      .split("\n")
+      .map((x) => x.trim())
+      .filter(Boolean);
+  } catch {
+    return false; // nothing listening, or lsof unavailable
+  }
+
+  let killed = false;
+  const target = appDir;
+  for (const pid of pids) {
+    let cwd = "";
+    try {
+      // -Fn prints the cwd path prefixed with "n"
+      const out = execFileSync("lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"], {
+        encoding: "utf8",
+        timeout: 4000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      cwd = (out.split("\n").find((l) => l.startsWith("n")) || "").slice(1);
+    } catch {
+      continue;
+    }
+    if (!isPathInside(target, cwd)) continue;
+    try {
+      process.kill(Number(pid), "SIGKILL");
+      killed = true;
+    } catch {
+      /* already gone */
+    }
+  }
+  return killed;
+}
+
+/**
+ * Stop a project's dev server. Returns true if anything was stopped.
+ *
+ * Falls back to the port reaper when the registry has no entry, so a server
+ * started before the last Cortex restart is still cleaned up.
+ */
+export function stopLaunchedApp(
+  projectId: string,
+  fallback?: { appDir?: string | null; url?: string | null },
+) {
+  const entry = runningApps().get(projectId);
+  if (!entry) {
+    if (fallback?.appDir) {
+      return reapOrphanServer(fallback.appDir, fallback.url ?? null);
+    }
+    return false;
+  }
   try {
     if (entry.child.pid) process.kill(-entry.child.pid, "SIGTERM");
   } catch {
@@ -546,6 +634,6 @@ export function stopLaunchedApp(projectId: string) {
       /* ignore */
     }
   }
-  running.delete(projectId);
+  runningApps().delete(projectId);
   return true;
 }

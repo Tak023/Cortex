@@ -85,8 +85,9 @@ function assertContainedWorkspace(dir: string): { ok: boolean; reason?: string }
     return { ok: false, reason: "Cortex workspace root is missing" };
   }
 
-  const rel = path.relative(root, resolvedDir);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { isPathInside } = require("../../build/pathContainment") as typeof import("../../build/pathContainment");
+  if (!isPathInside(root, resolvedDir)) {
     return {
       ok: false,
       reason: `${resolvedDir} is outside the Cortex workspace root (${root})`,

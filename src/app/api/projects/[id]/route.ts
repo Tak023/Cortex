@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteProject, getProject, upsertProject } from "@/lib/store";
+import { resolveAppDir, stopLaunchedApp } from "@/lib/build/launch";
 import { ensureProjectWorkspace } from "@/lib/workspace";
 import { stopProjectRunner } from "@/lib/orchestration/engine";
 import { getLaunchInfo } from "@/lib/build/launch";
@@ -65,9 +66,17 @@ export async function DELETE(
   }
 
   stopProjectRunner(id);
+  // Stop the project's dev server before its files are removed. Launched
+  // servers are detached, so a delete used to leave one running: it kept
+  // serving the old bundle from memory on the same port, from a directory
+  // that no longer existed, which reads as "the pipeline built nothing".
+  const stoppedApp = stopLaunchedApp(id, {
+    appDir: resolveAppDir(project),
+    url: project.launchUrl,
+  });
   const ok = deleteProject(id, { deleteWorkspace: true });
   if (!ok) {
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, id });
+  return NextResponse.json({ ok: true, id, stoppedApp });
 }

@@ -26,6 +26,7 @@ const ENTRYPOINTS = [
   "src/lib/agents/adapters/cliOutput.ts",
   "src/lib/build/styleCheck.ts",
   "src/lib/build/generateTests.ts",
+  "src/lib/build/pathContainment.ts",
 ];
 
 function compile() {
