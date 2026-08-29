@@ -8,6 +8,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import type { Concept, Project } from "../types";
 import { projectWorkspaceDir } from "../workspace";
+import { detectKind } from "./detectKind";
 import {
   childProjectInstallEnv,
   childProjectBuildEnv,
@@ -83,20 +84,7 @@ function dockerTemplateDir(): string {
   );
 }
 
-function detectKind(concept: Concept, ideaHint = ""): "docker" | "cli" | "api" | "web" {
-  const hay = `${concept.title} ${concept.summary} ${concept.features?.join(" ")} ${ideaHint}`.toLowerCase();
-  if (
-    hay.includes("docker") ||
-    hay.includes("container") ||
-    hay.includes("compose")
-  )
-    return "docker";
-  if (hay.includes("cli") || hay.includes("command-line") || hay.includes("terminal"))
-    return "cli";
-  if (hay.includes("api service") || hay.includes("rest api") || hay.includes("backend only"))
-    return "api";
-  return "web";
-}
+
 
 /**
  * Scaffold a runnable application under `<workspace>/app`.
