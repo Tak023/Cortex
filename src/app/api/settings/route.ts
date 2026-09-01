@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/store";
-import { isAiConfigured } from "@/lib/ai/client";
+import { isAiConfigured, isClaudeConfigured } from "@/lib/ai/client";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +9,7 @@ export async function GET() {
     settings: {
       ...getSettings(),
       xaiApiKeySet: isAiConfigured(),
+      anthropicApiKeySet: isClaudeConfigured(),
     },
   });
 }
@@ -140,6 +141,10 @@ export async function PATCH(req: Request) {
       : {}),
   });
   return NextResponse.json({
-    settings: { ...settings, xaiApiKeySet: isAiConfigured() },
+    settings: {
+      ...settings,
+      xaiApiKeySet: isAiConfigured(),
+      anthropicApiKeySet: isClaudeConfigured(),
+    },
   });
 }

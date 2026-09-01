@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { Concept } from "../types";
 import { nanoid } from "nanoid";
 
@@ -26,6 +29,39 @@ function getClient(): OpenAI | null {
 
 export function isAiConfigured(): boolean {
   return Boolean(process.env.XAI_API_KEY?.trim());
+}
+
+/**
+ * Claude for concept generation, alongside Grok.
+ *
+ * Activation is keyed on ANTHROPIC_API_KEY in *Cortex's* env (project
+ * `.env.local` in dev, `~/Library/Application Support/cortex/.env` on
+ * desktop). Deliberately not the shell environment: the shell export was
+ * removed because it silently switched Claude Code sessions from the Max plan
+ * to metered billing (review finding 01). Putting the key in Cortex's env
+ * scopes metered use to these SDK calls only.
+ */
+function getAnthropicClient(): Anthropic | null {
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) return null;
+  return new Anthropic({
+    apiKey: key,
+    // TypeScript SDK timeouts are milliseconds. Same rationale as
+    // XAI_TIMEOUT_MS above — but a measured Opus run took 81s (the model
+    // reasons before answering, unlike Grok), so Grok's 90s bound would
+    // time out healthy requests. Bounded at 4 minutes instead.
+    timeout: 240_000,
+    maxRetries: 1,
+  });
+}
+
+export function isClaudeConfigured(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+}
+
+/** Default Claude model for concept generation (override with CORTEX_CLAUDE_MODEL). */
+export function getClaudeModel(): string {
+  return process.env.CORTEX_CLAUDE_MODEL?.trim() || "claude-opus-5";
 }
 
 /** Default Grok model for interactive Jarvis chat (override with JARVIS_GROK_MODEL). */
@@ -93,77 +129,94 @@ export async function chatWithGrok(opts: {
 export type ConceptGeneration = {
   concepts: Concept[];
   /** Which engine actually produced the concepts */
-  source: "grok" | "local";
-  /** Model used when source === "grok" */
+  source: "grok" | "claude" | "local";
+  /** Model used when source is a live provider */
   model?: string;
-  /** Why Grok was not used (missing key, API error, parse failure, …) */
+  /** Why earlier providers were not used (missing key, API error, …) */
   fallbackReason?: string;
 };
 
 /**
  * Generate 10 concrete product concepts from a rough idea.
- * Uses Grok when XAI_API_KEY is set and the API call succeeds; otherwise
- * falls back to local synthesis and REPORTS WHY via `fallbackReason` so the
- * UI never silently pretends canned concepts came from Grok.
+ * Provider chain: Grok → Claude → local synthesis. Every fallback REPORTS WHY
+ * via `fallbackReason` so the UI never silently pretends canned concepts came
+ * from a live model.
  */
 export async function generateConcepts(
   statement: string,
   templateHint?: string,
   agentsUsed: string[] = ["Grok", "Hermes", "Claude Code"],
 ): Promise<ConceptGeneration> {
-  const client = getClient();
-  if (!client) {
-    return {
-      concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
-      source: "local",
-      fallbackReason: "XAI_API_KEY is not set",
-    };
+  // Provider chain: Grok first (the incumbent — adding Claude must not change
+  // behaviour for a Grok-configured machine), then Claude, then local
+  // synthesis. Each failure is carried forward so the UI can say exactly why
+  // a fallback happened rather than silently pretending.
+  const reasons: string[] = [];
+
+  const grok = getClient();
+  if (grok) {
+    const model = getGrokChatModel();
+    try {
+      const concepts = await generateWithGrok(
+        grok,
+        model,
+        statement,
+        templateHint,
+        agentsUsed,
+      );
+      return { concepts, source: "grok", model };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn("Grok concept generation failed:", reason);
+      reasons.push(`Grok: ${reason}`);
+    }
+  } else {
+    reasons.push("Grok: XAI_API_KEY is not set");
   }
-  const model = getGrokChatModel();
-  try {
-    const concepts = await generateWithGrok(
-      client,
-      model,
-      statement,
-      templateHint,
-      agentsUsed,
-    );
-    return { concepts, source: "grok", model };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    console.warn("Grok concept generation failed, falling back to local:", reason);
-    return {
-      concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
-      source: "local",
-      fallbackReason: reason,
-    };
+
+  const claude = getAnthropicClient();
+  if (claude) {
+    const model = getClaudeModel();
+    try {
+      const concepts = await generateWithClaude(
+        claude,
+        model,
+        statement,
+        templateHint,
+        agentsUsed,
+      );
+      return {
+        concepts,
+        source: "claude",
+        model,
+        fallbackReason: reasons.length ? reasons.join("; ") : undefined,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn("Claude concept generation failed:", reason);
+      reasons.push(`Claude: ${reason}`);
+    }
+  } else {
+    reasons.push("Claude: ANTHROPIC_API_KEY is not set in Cortex's env");
   }
+
+  return {
+    concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
+    source: "local",
+    fallbackReason: reasons.join("; "),
+  };
 }
 
-async function generateWithGrok(
-  client: OpenAI,
-  model: string,
-  statement: string,
-  templateHint: string | undefined,
-  agentsUsed: string[],
-): Promise<Concept[]> {
-  const prompt = `You are the brainstorm coordinator for Cortex, a multi-agent OS.
+/** Shared brainstorm brief so Grok and Claude answer the same question. */
+function conceptBrief(statement: string, templateHint?: string): string {
+  return `You are the brainstorm coordinator for Cortex, a multi-agent OS.
 A user submitted this idea:
 """
 ${statement}
 """
 ${templateHint ? `Preferred product type: ${templateHint}` : ""}
 
-Return ONLY valid JSON (no markdown) as an array of 10 concept objects with this shape:
-{
-  "title": string,
-  "summary": string (2-3 sentences),
-  "features": string[] (4-6 concrete features),
-  "stack": string[] (3-6 technologies),
-  "difficulty": "easy" | "medium" | "hard",
-  "estimatedEffort": string (e.g. "1 week", "3-4 weeks"),
-  "score": number 0-100
-}
+Produce exactly 10 product concepts.
 
 HARD REQUIREMENTS:
 - Every concept must be a direct product take on the user's idea above — same
@@ -175,6 +228,86 @@ HARD REQUIREMENTS:
 - Pick the stack that genuinely fits each concept; vary stacks across
   concepts where justified rather than repeating one default stack.
 Be specific and actionable — these will feed a full build pipeline.`;
+}
+
+const ConceptListSchema = z.object({
+  concepts: z
+    .array(
+      z.object({
+        title: z.string(),
+        summary: z.string(),
+        features: z.array(z.string()),
+        stack: z.array(z.string()),
+        difficulty: z.enum(["easy", "medium", "hard"]),
+        estimatedEffort: z.string(),
+        score: z.number(),
+      }),
+    )
+    .min(1)
+    .max(10),
+});
+
+/**
+ * Claude path — structured outputs via `messages.parse`, which constrains the
+ * response to the schema server-side. No "find the outermost JSON array"
+ * scraping: the parse either returns typed concepts or throws, and the throw
+ * falls through to the next provider with its reason preserved.
+ */
+async function generateWithClaude(
+  client: Anthropic,
+  model: string,
+  statement: string,
+  templateHint: string | undefined,
+  agentsUsed: string[],
+): Promise<Concept[]> {
+  const response = await client.messages.parse({
+    model,
+    // Ten fully-specified concepts run ~4k output tokens; leave headroom.
+    max_tokens: 16000,
+    messages: [
+      { role: "user", content: conceptBrief(statement, templateHint) },
+    ],
+    output_config: { format: zodOutputFormat(ConceptListSchema) },
+  });
+
+  const parsed = response.parsed_output;
+  if (!parsed?.concepts?.length) {
+    throw new Error("Claude returned no concepts");
+  }
+  return parsed.concepts.slice(0, 10).map((c) => ({
+    id: `concept-${nanoid(8)}`,
+    title: c.title,
+    summary: c.summary,
+    features: c.features ?? [],
+    stack: c.stack ?? [],
+    difficulty: c.difficulty ?? "medium",
+    estimatedEffort: c.estimatedEffort ?? "2-3 weeks",
+    agentsUsed,
+    score: c.score ?? 70,
+  }));
+}
+
+async function generateWithGrok(
+  client: OpenAI,
+  model: string,
+  statement: string,
+  templateHint: string | undefined,
+  agentsUsed: string[],
+): Promise<Concept[]> {
+  // Same brief as Claude, plus the JSON-array instruction Grok needs since
+  // the xAI endpoint has no structured-output guarantee here.
+  const prompt = `${conceptBrief(statement, templateHint)}
+
+Return ONLY valid JSON (no markdown) as an array of 10 concept objects with this shape:
+{
+  "title": string,
+  "summary": string (2-3 sentences),
+  "features": string[] (4-6 concrete features),
+  "stack": string[] (3-6 technologies),
+  "difficulty": "easy" | "medium" | "hard",
+  "estimatedEffort": string (e.g. "1 week", "3-4 weeks"),
+  "score": number 0-100
+}`;
 
   const resp = await client.chat.completions.create(
     {

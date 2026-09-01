@@ -3,7 +3,7 @@
   "version": "0.2.11",
   "private": true,
   "license": "GPL-3.0-only",
-  "description": "Cortex \u2014 Agentic OS control plane (desktop + local web)",
+  "description": "Cortex — Agentic OS control plane (desktop + local web)",
   "author": "Cortex",
   "main": "electron/main.cjs",
   "scripts": {
@@ -20,6 +20,7 @@
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@huggingface/transformers": "^4.2.0",
     "@lancedb/lancedb": "^0.37.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -57,7 +58,7 @@
   "build": {
     "appId": "ai.cortex.os",
     "productName": "Cortex",
-    "copyright": "Copyright \u00a9 Cortex",
+    "copyright": "Copyright © Cortex",
     "afterPack": "scripts/after-pack.cjs",
     "directories": {
       "output": "dist-desktop",

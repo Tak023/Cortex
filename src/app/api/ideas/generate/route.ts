@@ -99,7 +99,7 @@ export async function POST(req: Request) {
         id: `use-${nanoid(8)}`,
         agentId: a.id,
         tokens: Math.floor(800 + Math.random() * 1500),
-        costUsd: source === "grok" ? 0.01 : 0,
+        costUsd: source === "local" ? 0 : 0.01,
         latencyMs: Math.floor(latency / team.length),
         createdAt: new Date().toISOString(),
       });
@@ -116,7 +116,7 @@ export async function POST(req: Request) {
 
     pushActivity({
       type: "concept_generated",
-      message: `Generated ${concepts.length} concepts (${source === "grok" ? `Grok · ${model}` : "local synthesis"}) for "${statement.slice(0, 60)}${statement.length > 60 ? "…" : ""}"`,
+      message: `Generated ${concepts.length} concepts (${source === "grok" ? `Grok · ${model}` : source === "claude" ? `Claude · ${model}` : "local synthesis"}) for "${statement.slice(0, 60)}${statement.length > 60 ? "…" : ""}"`,
     });
 
     return NextResponse.json({
