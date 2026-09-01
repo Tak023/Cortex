@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { MetricsSource } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -20,6 +21,47 @@ export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+/**
+ * Presentation rules for metric provenance. A number that was never measured
+ * must never render like one that was — either it carries a visible marker or
+ * it is withheld entirely.
+ */
+export function metricProvenance(
+  source: MetricsSource | undefined,
+  showSeeded: boolean,
+): {
+  measured: boolean;
+  /** False when the value must be replaced by an em dash. */
+  render: boolean;
+  chip: string | null;
+  className: string;
+  title: string;
+} {
+  const s = source ?? "seeded";
+  if (s === "measured") {
+    return {
+      measured: true,
+      render: true,
+      chip: null,
+      className: "",
+      title: "Measured from live agent runs",
+    };
+  }
+  const chip = s === "simulated" ? "sim" : "seed";
+  const title =
+    s === "simulated"
+      ? "Produced by the simulation adapter — not a real model call"
+      : "Registry placeholder — never measured on this machine";
+  return {
+    measured: false,
+    render: showSeeded,
+    chip,
+    className:
+      "text-muted decoration-dotted underline underline-offset-4 decoration-muted/60",
+    title,
+  };
 }
 
 export function statusColor(status: string): string {

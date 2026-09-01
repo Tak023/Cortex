@@ -60,7 +60,13 @@ export function VoiceTextArea({
   const autoId = useId();
   const id = idProp || autoId;
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // Not a plain mirror: `valueRef` is also written imperatively when dictation
+  // appends text and when the DOM value drifts from React's (external
+  // dictation apps type straight into the textarea). The render-time
+  // assignment is what re-syncs it to the controlled prop. Deferring that to
+  // an effect would let a dictation write win over a newer prop value.
   const valueRef = useRef(value);
+  // eslint-disable-next-line react-hooks/refs -- mirror doubles as an imperative buffer; see above
   valueRef.current = value;
   const [externalKey, setExternalKey] = useState(0);
   const [pasteHint, setPasteHint] = useState<string | null>(null);

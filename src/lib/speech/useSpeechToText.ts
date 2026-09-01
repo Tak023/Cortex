@@ -58,8 +58,15 @@ export function useSpeechToText(opts: {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<TranscribeProgress | null>(null);
 
+  // Latest-callback ref: transcription finishes asynchronously and must call
+  // the newest `onTranscript` without re-subscribing the recorder. Synced in
+  // an effect rather than during render — a ref write during render is not
+  // safe under React Compiler, and this ref is only ever read from async
+  // callbacks, so post-paint timing is sufficient.
   const onTranscriptRef = useRef(onTranscript);
-  onTranscriptRef.current = onTranscript;
+  useEffect(() => {
+    onTranscriptRef.current = onTranscript;
+  }, [onTranscript]);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);

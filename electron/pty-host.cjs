@@ -206,7 +206,31 @@ function loadNodePty() {
   throw err;
 }
 
-function buildEnv() {
+/**
+ * Governance arrives from the Cortex server (see src/lib/agents/governance.ts)
+ * and travels through the renderer, so it is validated here before it reaches
+ * a spawn: conservative shapes only, no shell metacharacters, bounded length.
+ */
+const SAFE_ARG = /^[A-Za-z0-9=_\-./:@]+$/;
+const SAFE_ENV_KEY = /^[A-Z][A-Z0-9_]*$/;
+
+function sanitizeExtraArgs(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .slice(0, 8)
+    .map((a) => String(a))
+    .filter((a) => a.length > 0 && a.length <= 64 && SAFE_ARG.test(a));
+}
+
+function sanitizeUnsetEnv(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .slice(0, 16)
+    .map((k) => String(k))
+    .filter((k) => SAFE_ENV_KEY.test(k));
+}
+
+function buildEnv(unsetEnv = []) {
   const home = process.env.HOME || os.homedir();
   const extra = [
     path.join(home, ".local/bin"),
@@ -258,6 +282,10 @@ function buildEnv() {
       delete env[key];
     }
   }
+  // Fleet auth policy (e.g. hide ANTHROPIC_API_KEY so a claude.ai plan wins).
+  for (const key of unsetEnv) {
+    delete env[key];
+  }
   return env;
 }
 
@@ -266,7 +294,8 @@ function makeId() {
 }
 
 /**
- * @param {{ agent: string, cols?: number, rows?: number, cwd?: string }} opts
+ * @param {{ agent: string, cols?: number, rows?: number, cwd?: string,
+ *           extraArgs?: string[], unsetEnv?: string[] }} opts
  * @param {(payload: { id: string, type: 'data'|'exit'|'error', data?: string, exitCode?: number }) => void} emit
  */
 function createSession(opts, emit) {
@@ -288,16 +317,21 @@ function createSession(opts, emit) {
   const id = makeId();
   const cols = Math.max(20, opts.cols || 120);
   const rows = Math.max(10, opts.rows || 36);
-  const cwd = opts.cwd || resolved.cwd;
+  const requestedCwd = opts.cwd ? String(opts.cwd) : "";
+  const cwd =
+    requestedCwd && exists(requestedCwd) ? requestedCwd : resolved.cwd;
+  const extraArgs = sanitizeExtraArgs(opts.extraArgs);
+  const unsetEnv = sanitizeUnsetEnv(opts.unsetEnv);
+  const args = [...(resolved.args || []), ...extraArgs];
 
   let proc;
   try {
-    proc = pty.spawn(resolved.command, resolved.args || [], {
+    proc = pty.spawn(resolved.command, args, {
       name: "xterm-256color",
       cols,
       rows,
       cwd,
-      env: buildEnv(),
+      env: buildEnv(unsetEnv),
     });
   } catch (e) {
     return {
@@ -307,11 +341,12 @@ function createSession(opts, emit) {
   }
 
   const bus = new EventEmitter();
+  const display = [resolved.command, ...args].join(" ");
   const session = {
     id,
     agent: opts.agent,
     label: resolved.label,
-    display: resolved.display,
+    display,
     cwd,
     createdAt: new Date().toISOString(),
     exited: false,

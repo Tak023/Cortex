@@ -5,12 +5,25 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { VoiceTextArea } from "@/components/ui/VoiceTextArea";
 import { useAgents, useSettings } from "@/lib/hooks";
-import type { VoiceInputMode } from "@/lib/types";
+import type {
+  AgentApprovalPolicy,
+  AgentWorkspaceScope,
+  ClaudeAuthPreference,
+  RoutingPolicy,
+  VoiceInputMode,
+} from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 
 type JarvisStatus = {
   online: boolean;
-  health?: { ok: boolean; detail: string; backend?: string; models?: string[] };
+  health?: {
+    ok: boolean;
+    detail: string;
+    backend?: string;
+    models?: string[];
+    /** The endpoint that actually answered, which may be a fallback. */
+    endpoint?: string;
+  };
   baseUrl?: string;
   serveHint?: string;
   install?: string;
@@ -414,6 +427,24 @@ export default function SettingsPage() {
             <div className="rounded-lg border border-border-subtle bg-panel-elevated/40 px-3 py-2 text-xs text-muted">
               <div className="mb-1 font-medium text-foreground/80">Status</div>
               <p>{jarvis?.health?.detail || "Not checked yet"}</p>
+              {/*
+                Chat requests walk a fallback chain (LM Studio → configured URL
+                → Ollama → jarvis serve), so the configured port above is not
+                necessarily the one serving. Name the winner explicitly.
+              */}
+              <p className="mt-1">
+                Resolved chat endpoint:{" "}
+                <code className="text-foreground/70">
+                  {jarvis?.health?.endpoint || "none reachable"}
+                </code>
+                {jarvis?.health?.endpoint &&
+                jarvis.health.endpoint !== settings?.jarvisChatBaseUrl ? (
+                  <span className="ml-1 text-amber-300/90">
+                    (fallback — configured{" "}
+                    {settings?.jarvisChatBaseUrl || "unset"})
+                  </span>
+                ) : null}
+              </p>
               {jarvis?.health?.models && jarvis.health.models.length > 0 && (
                 <p className="mt-1">
                   Models: {jarvis.health.models.slice(0, 6).join(", ")}
@@ -497,6 +528,328 @@ export default function SettingsPage() {
             {saved && (
               <p className="text-xs text-emerald-400">{saved}</p>
             )}
+          </CardBody>
+        </Card>
+
+        <Card id="fleet-governance">
+          <CardHeader>
+            <div>
+              <span className="text-sm font-medium">Fleet governance</span>
+              <p className="mt-0.5 text-[11px] text-muted">
+                Applies to every embedded agent terminal at launch
+              </p>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <label className="block">
+              <div className="mb-1 text-sm">Approval posture</div>
+              <select
+                value={settings?.agentApprovalPolicy ?? "inherit"}
+                onChange={async (e) => {
+                  await update({
+                    agentApprovalPolicy: e.target
+                      .value as AgentApprovalPolicy,
+                  });
+                  flash("Approval policy saved");
+                }}
+                className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+              >
+                <option value="inherit">
+                  Inherit — whatever each CLI defaults to
+                </option>
+                <option value="read-only">
+                  Read-only — plan and inspect, no writes
+                </option>
+                <option value="ask">Ask — confirm before acting</option>
+                <option value="auto">
+                  Auto-approve — no prompts (highest risk)
+                </option>
+              </select>
+              <p className="mt-1 text-xs text-muted">
+                Translated into each CLI&apos;s own flags, and only passed when
+                that CLI advertises the flag in its <code>--help</code>. Agents
+                without a verified flag keep their own default and say so on the
+                Agents page.
+              </p>
+            </label>
+
+            <label className="block">
+              <div className="mb-1 text-sm">Workspace scope</div>
+              <select
+                value={settings?.agentWorkspaceScope ?? "project"}
+                onChange={async (e) => {
+                  await update({
+                    agentWorkspaceScope: e.target
+                      .value as AgentWorkspaceScope,
+                  });
+                  flash("Workspace scope saved");
+                }}
+                className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+              >
+                <option value="project">
+                  Active project — the most recent project workspace
+                </option>
+                <option value="custom">Fixed directory (below)</option>
+                <option value="home">
+                  Home folder — everything you own is in scope
+                </option>
+              </select>
+            </label>
+
+            <label className="block">
+              <div className="mb-1 text-sm">
+                Fixed workspace directory
+                <span className="ml-1 text-xs text-muted">
+                  (also the fallback when no project exists yet)
+                </span>
+              </div>
+              <input
+                type="text"
+                placeholder="~/Projects"
+                value={settings?.agentWorkspaceDir ?? ""}
+                onChange={async (e) => {
+                  await update({ agentWorkspaceDir: e.target.value });
+                }}
+                onBlur={() => flash("Workspace directory saved")}
+                className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+              />
+            </label>
+
+            <label className="block">
+              <div className="mb-1 text-sm">Claude credential preference</div>
+              <select
+                value={settings?.claudeAuthPreference ?? "auto"}
+                onChange={async (e) => {
+                  await update({
+                    claudeAuthPreference: e.target
+                      .value as ClaudeAuthPreference,
+                  });
+                  flash("Claude auth preference saved");
+                }}
+                className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+              >
+                <option value="auto">
+                  Prefer subscription — hide ANTHROPIC_API_KEY when a claude.ai
+                  session exists
+                </option>
+                <option value="subscription">
+                  Always subscription — never pass ANTHROPIC_API_KEY
+                </option>
+                <option value="api-key">
+                  Always API key — bill metered usage
+                </option>
+              </select>
+              <p className="mt-1 text-xs text-muted">
+                When both a claude.ai session and{" "}
+                <code>ANTHROPIC_API_KEY</code> are present, the environment
+                variable normally wins and every token is billed as metered API
+                usage while the plan sits idle. The first two options remove the
+                variable from the spawned process so the plan is used.
+              </p>
+            </label>
+
+            <label className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm">Generate feature code</div>
+                <div className="text-xs text-muted">
+                  Let the Implementation phase run a coding agent with write
+                  access <strong>inside the project workspace only</strong>, so
+                  the concept&apos;s features are built rather than listed. It
+                  verifies and repairs until the build passes, and restores the
+                  scaffold if it cannot. Requires Claude Code or Codex; disabled
+                  automatically when the approval posture is read-only.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings?.codegenEnabled !== false}
+                onChange={async (e) => {
+                  await update({ codegenEnabled: e.target.checked });
+                  flash("Saved");
+                }}
+                className="h-4 w-4 accent-blue-500"
+              />
+            </label>
+
+            <label className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm">Show placeholder metrics</div>
+                <div className="text-xs text-muted">
+                  Registry seed and simulated values are always chipped. Turn
+                  this off to hide them entirely and show &quot;—&quot; until an
+                  agent is actually measured.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings?.showSeededMetrics ?? true}
+                onChange={async (e) => {
+                  await update({ showSeededMetrics: e.target.checked });
+                  flash("Saved");
+                }}
+                className="h-4 w-4 accent-blue-500"
+              />
+            </label>
+          </CardBody>
+        </Card>
+
+        <Card id="routing-budgets">
+          <CardHeader>
+            <div>
+              <span className="text-sm font-medium">Routing &amp; budgets</span>
+              <p className="mt-0.5 text-[11px] text-muted">
+                Which agent gets which class of work, and what it may cost
+              </p>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <label className="block">
+              <div className="mb-1 text-sm">Routing policy</div>
+              <select
+                value={settings?.routingPolicy ?? "quality-first"}
+                onChange={async (e) => {
+                  await update({
+                    routingPolicy: e.target.value as RoutingPolicy,
+                  });
+                  flash("Routing policy saved");
+                }}
+                className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+              >
+                <option value="quality-first">
+                  Quality first — curated specialist per phase, cost ignored
+                </option>
+                <option value="cost-aware">
+                  Cost aware — cheapest agent proven on the class, escalate on
+                  failure
+                </option>
+                <option value="local-first">
+                  Local first — a local model must fail before paid work
+                </option>
+              </select>
+              <p className="mt-1 text-xs text-muted">
+                Cost-aware routing only moves work to a cheaper agent once that
+                agent has <em>measured</em> success on that task class. Seeded
+                registry numbers never count, so nothing is handed to a model
+                that has not actually done the job.
+              </p>
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <div className="mb-1 text-sm">
+                  Success bar
+                  <span className="ml-1 text-xs text-muted">
+                    ({Math.round((settings?.routingMinSuccessRate ?? 0.7) * 100)}%)
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(
+                    (settings?.routingMinSuccessRate ?? 0.7) * 100,
+                  )}
+                  onChange={async (e) => {
+                    await update({
+                      routingMinSuccessRate: Number(e.target.value) / 100,
+                    });
+                  }}
+                  className="w-full accent-blue-500"
+                />
+                <p className="mt-1 text-xs text-muted">
+                  High-stakes classes (architect, implement) enforce a stricter
+                  floor than this regardless.
+                </p>
+              </label>
+
+              <label className="block">
+                <div className="mb-1 text-sm">Runs before trusting a stat</div>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={settings?.routingMinAttempts ?? 3}
+                  onChange={async (e) => {
+                    await update({
+                      routingMinAttempts: Number(e.target.value) || 3,
+                    });
+                  }}
+                  onBlur={() => flash("Saved")}
+                  className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+                />
+              </label>
+            </div>
+
+            <label className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm">Let local models earn evidence</div>
+                <div className="text-xs text-muted">
+                  Allows an unproven local model to attempt low-stakes classes
+                  (draft, summarize). Without this the router can never learn
+                  anything new.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings?.routingExploreUnproven !== false}
+                onChange={async (e) => {
+                  await update({ routingExploreUnproven: e.target.checked });
+                  flash("Saved");
+                }}
+                className="h-4 w-4 accent-blue-500"
+              />
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <div className="mb-1 text-sm">Daily cap (USD)</div>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  placeholder="no cap"
+                  value={settings?.dailyBudgetUsd ?? ""}
+                  onChange={async (e) => {
+                    const v = e.target.value.trim();
+                    await update({
+                      dailyBudgetUsd: v === "" ? null : Number(v),
+                    });
+                  }}
+                  onBlur={() => flash("Budget saved")}
+                  className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+                />
+              </label>
+              <label className="block">
+                <div className="mb-1 text-sm">Per-project cap (USD)</div>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  placeholder="no cap"
+                  value={settings?.projectBudgetUsd ?? ""}
+                  onChange={async (e) => {
+                    const v = e.target.value.trim();
+                    await update({
+                      projectBudgetUsd: v === "" ? null : Number(v),
+                    });
+                  }}
+                  onBlur={() => flash("Budget saved")}
+                  className="w-full rounded-lg border border-border bg-panel-elevated px-3 py-2 text-sm outline-none focus:border-blue-500/50"
+                />
+              </label>
+            </div>
+            <p className="text-xs text-muted">
+              Caps are a hard stop on <strong>metered</strong> spend only —
+              local models and work covered by a subscription are always free to
+              run. When a cap is reached, metered agents stop being routable; if
+              nothing free can take the phase, the project pauses with the
+              reason rather than spending past the cap. Live state is on the{" "}
+              <a href="/orchestration" className="text-accent hover:underline">
+                Orchestration
+              </a>{" "}
+              page.
+            </p>
           </CardBody>
         </Card>
 

@@ -20,6 +20,19 @@ export function useSpeechSynthesis(defaults?: {
   lang?: string;
   voiceHint?: string;
 }) {
+  // Destructured up front, deliberately. Callers pass an object literal
+  // (`useSpeechSynthesis({ rate: 1.04, lang: "en-US" })`), so `defaults` is a
+  // new reference every render — memoizing `speak` against the object itself
+  // would invalidate it on every render and cascade through the effects that
+  // depend on it. Reading the primitives here keeps the callback stable *and*
+  // lets React Compiler infer the same dependencies the code declares.
+  const {
+    rate: defaultRate,
+    pitch: defaultPitch,
+    lang: defaultLang,
+    voiceHint: defaultVoiceHint,
+  } = defaults ?? {};
+
   const [status, setStatus] = useState<TtsStatus>(() =>
     typeof window === "undefined"
       ? "idle"
@@ -62,10 +75,10 @@ export function useSpeechSynthesis(defaults?: {
       setError(null);
       try {
         await speakText(text, {
-          rate: defaults?.rate,
-          pitch: defaults?.pitch,
-          lang: defaults?.lang,
-          voiceHint: defaults?.voiceHint,
+          rate: defaultRate,
+          pitch: defaultPitch,
+          lang: defaultLang,
+          voiceHint: defaultVoiceHint,
           ...opts,
           onStart: () => {
             if (genRef.current !== myGen) return;
@@ -94,7 +107,7 @@ export function useSpeechSynthesis(defaults?: {
         }
       }
     },
-    [enabled, defaults?.rate, defaults?.pitch, defaults?.lang, defaults?.voiceHint],
+    [enabled, defaultRate, defaultPitch, defaultLang, defaultVoiceHint],
   );
 
   return {

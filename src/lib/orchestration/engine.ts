@@ -10,14 +10,19 @@ import {
   upsertProject,
 } from "../store";
 import { synthesizePhaseOutput } from "../ai/client";
-import { routeAgent } from "../agents/router";
+import { escalateFrom, routeAgent } from "../agents/router";
+import { taskClassForPhase } from "../agents/taskClass";
+import { budgetGate, costForRun, routeTask } from "./routing";
+import { recordRoutingOutcome } from "./routingStats";
 import {
+  hasLiveAdapter,
   invokeAgent,
   isJarvisAgent,
 } from "../agents/adapters";
 import { ensureProjectWorkspace } from "../workspace";
 import { searchVault, writeVaultProjectNote } from "../vault/vault";
 import { scaffoldAppFromConcept } from "../build/scaffold";
+import { generateFeatureCode } from "../build/codegen";
 import { getLaunchInfo } from "../build/launch";
 import { verifyAppBuild } from "../build/verify";
 
@@ -53,6 +58,21 @@ function scheduleStageRecovery(
   const used = task.retryCount ?? 0;
   const max = maxRetriesFor(task);
   if (used >= max) return false;
+
+  // Close the loop: a failure is evidence about this (agent, class) pair, and
+  // it also disqualifies the agent from the retry so the router escalates
+  // instead of re-running whatever just failed.
+  if (task.agentId) {
+    recordRoutingOutcome({
+      agentId: task.agentId,
+      taskClass: taskClassForPhase(task.phase),
+      ok: false,
+      error,
+    });
+    task.failedAgentIds = Array.from(
+      new Set([...(task.failedAgentIds ?? []), task.agentId]),
+    );
+  }
 
   task.retryCount = used + 1;
   task.lastError = error;
@@ -374,12 +394,48 @@ function tickProject(projectId: string) {
 function startTask(project: Project, task: Task) {
   const agents = getState().agents;
   let agentId = task.agentId;
+  let routingNote: string | null = null;
 
-  // Re-route if agent missing or offline
-  if (!agentId || agents.find((a) => a.id === agentId)?.status === "error") {
-    const agent = routeAgent(agents, task.phase);
-    agentId = agent?.id ?? null;
+  const failed = task.failedAgentIds ?? [];
+  const needsRoute =
+    !agentId ||
+    agents.find((a) => a.id === agentId)?.status === "error" ||
+    failed.includes(agentId);
+
+  if (needsRoute) {
+    // Escalation: an agent that already failed this task never gets it again.
+    const decision = routeTask({
+      phase: task.phase,
+      projectId: project.id,
+      excludeIds: failed,
+    });
+    const next =
+      failed.length > 0 ? (escalateFrom(decision, failed) ?? decision.agentId) : decision.agentId;
+    agentId = next ?? routeAgent(agents, task.phase, failed)?.id ?? null;
     task.agentId = agentId;
+    task.routingReason = decision.reason;
+    routingNote = decision.reason;
+  }
+
+  // Hard stop: never dispatch metered work past a spent cap. Free agents are
+  // unaffected, so a capped day degrades to local-only rather than stopping.
+  const gate = budgetGate(agentId, project.id);
+  if (gate.blocked) {
+    const localOnly = routeTask({
+      phase: task.phase,
+      projectId: project.id,
+      excludeIds: [...failed, ...(agentId ? [agentId] : [])],
+    });
+    const fallback = localOnly.agentId;
+    if (fallback && !budgetGate(fallback, project.id).blocked) {
+      agentId = fallback;
+      task.agentId = agentId;
+      task.routingReason = `${gate.reason} Rerouted to ${localOnly.agentName} (free).`;
+      routingNote = task.routingReason;
+    } else {
+      pauseProjectForBudget(project, task, gate.reason ?? "Budget cap reached.");
+      return;
+    }
   }
 
   task.status = "running";
@@ -392,7 +448,9 @@ function startTask(project: Project, task: Task) {
     id: `msg-${nanoid(6)}`,
     role: "agent",
     agentId: agentId ?? undefined,
-    content: `Starting **${task.title}** (${task.phase}).`,
+    content:
+      `Starting **${task.title}** (${task.phase}).` +
+      (routingNote ? `\n\n_Routing: ${routingNote}_` : ""),
     createdAt: new Date().toISOString(),
   });
 
@@ -412,6 +470,47 @@ function startTask(project: Project, task: Task) {
     projectId: project.id,
     taskId: task.id,
   });
+}
+
+/**
+ * Stop the pipeline because a spend cap is exhausted and no free agent can
+ * take over. A budget that only warns is not a budget.
+ */
+function pauseProjectForBudget(project: Project, task: Task, reason: string) {
+  task.status = "paused";
+  task.lastError = reason;
+  project.paused = true;
+  project.status = "paused";
+  project.updatedAt = new Date().toISOString();
+  project.resolutionGuide = [
+    reason,
+    "Raise or clear the cap in Settings › Routing & budgets, then resume.",
+    "Or enable a local model so the remaining phases can run at no marginal cost.",
+  ];
+  project.messages.push({
+    id: `msg-${nanoid(6)}`,
+    role: "system",
+    content:
+      `**Paused — spend cap reached.** ${reason}\n\n` +
+      `No free agent can take **${task.title}**. Raise the cap in ` +
+      `Settings › Routing & budgets, or enable a local model, then resume.`,
+    createdAt: new Date().toISOString(),
+  });
+  if (task.agentId) {
+    updateAgent(task.agentId, {
+      status: "idle",
+      currentTaskId: null,
+      currentTaskLabel: null,
+    });
+  }
+  upsertProject(project);
+  pushActivity({
+    type: "error",
+    message: `Budget stop on "${project.name}": ${reason}`,
+    projectId: project.id,
+    taskId: task.id,
+  });
+  stopProjectRunner(project.id);
 }
 
 function advanceRunningTask(project: Project, task: Task) {
@@ -490,7 +589,46 @@ async function runImplementationBuild(projectId: string, taskId: string) {
   try {
     const result = await scaffoldAppFromConcept(project, { runInstall: true });
     project.workspacePath = ensureProjectWorkspace(project);
-    // Re-export so app/ is included after scaffold
+
+    // The scaffold is a starting point, not the product. Hand it to a coding
+    // agent to implement the concept's features, verify, and repair.
+    const codegen = await generateFeatureCode({
+      project,
+      appDir: result.appDir,
+      agentId: task.agentId,
+      onProgress: (message) =>
+        pushActivity({
+          type: "info",
+          message,
+          projectId,
+          taskId,
+          agentId: task.agentId ?? undefined,
+        }),
+    });
+
+    if (codegen.tokens > 0 && task.agentId) {
+      recordRoutingOutcome({
+        agentId: task.agentId,
+        taskClass: "implement",
+        ok: codegen.ok,
+        tokens: codegen.tokens,
+        error: codegen.ok ? undefined : codegen.reason,
+      });
+      const { costUsd, tier } = costForRun(task.agentId, codegen.tokens);
+      pushUsage({
+        id: `use-${nanoid(8)}`,
+        agentId: task.agentId,
+        projectId: project.id,
+        tokens: codegen.tokens,
+        costUsd: Number(costUsd.toFixed(4)),
+        latencyMs: 0,
+        createdAt: new Date().toISOString(),
+        taskClass: "implement",
+        costTier: tier,
+      });
+    }
+
+    // Re-export so app/ is included after scaffold + generation
     project.workspacePath = ensureProjectWorkspace(project);
 
     // Do not hand off a broken tree to Testing
@@ -603,11 +741,24 @@ ${project.concept.summary}
       role: "agent",
       agentId: t.agentId ?? undefined,
       content:
-        `**App scaffolded & build smoke passed.**\n\n` +
+        (codegen.ok
+          ? `**App built & verified.**\n\n` +
+            `${agentName(task.agentId)} implemented the concept's features on top of the ` +
+            `scaffold: ${codegen.filesChanged.length} file(s) changed` +
+            (codegen.repairRounds
+              ? `, after ${codegen.repairRounds} repair round(s)`
+              : "") +
+            `. The build passes.\n\n`
+          : `**Starter app scaffolded & build smoke passed.**\n\n` +
+            `⚠️ Feature code was *not* generated — ${codegen.reason}\n` +
+            (codegen.restoredFromSnapshot
+              ? `The working scaffold was restored, so the app still runs.\n`
+              : "") +
+            `What you have is a starter page rendering the concept's title, summary, ` +
+            `feature list and stack.\n\n`) +
         `1. Click **Launch app** on this project page\n` +
         `2. Or Terminal:\n\`\`\`\n${result.runHint}\n\`\`\`\n` +
-        `3. Folder: \`${result.appDir}\`\n\n` +
-        `Testing will run Vitest (and Playwright when available).`,
+        `3. Folder: \`${result.appDir}\``,
       createdAt: new Date().toISOString(),
     });
 
@@ -623,7 +774,8 @@ ${project.concept.summary}
           ? {
               metrics: {
                 ...agent.metrics,
-                tokensUsed: agent.metrics.tokensUsed + 2500,
+                // Scaffolding is a local file operation — no model tokens are
+                // spent, so nothing is added to the token counter here.
                 tasksCompleted: agent.metrics.tasksCompleted + 1,
               },
             }
@@ -897,10 +1049,6 @@ async function runTestingVerify(projectId: string, taskId: string) {
 }
 
 function shouldInvokeLiveAgent(task: Task): boolean {
-  const settings = getSettings();
-  if (!settings.jarvisUseInPipeline || settings.jarvisEnabled === false) {
-    return false;
-  }
   if (!task.agentId) return false;
   const agent = getState().agents.find((a) => a.id === task.agentId);
   if (!agent || !agent.config.enabled) return false;
@@ -910,7 +1058,15 @@ function shouldInvokeLiveAgent(task: Task): boolean {
   if (task.phase === "implementation" || task.phase === "testing") {
     return false;
   }
-  return isJarvisAgent(agent);
+
+  const settings = getSettings();
+  // The Jarvis kill switch governs Jarvis, not every local runtime. Gating
+  // LM Studio behind it would leave the on-device models unreachable for a
+  // reason that has nothing to do with them.
+  if (isJarvisAgent(agent)) {
+    return settings.jarvisUseInPipeline !== false && settings.jarvisEnabled !== false;
+  }
+  return hasLiveAdapter(agent);
 }
 
 /** Write the project outcome to the Obsidian vault as long-term memory. */
@@ -1034,11 +1190,36 @@ async function finalizePhaseWithLiveAgent(projectId: string, taskId: string) {
 
   if (!result.ok || !result.content.trim()) {
     const err = result.error || "empty response from live agent";
-    // First: local synthesis fallback so the stage still completes
+
+    // Escalate before degrading. A dead LM Studio or a refused generation
+    // should hand the phase up the cost ladder — silently turning it into
+    // template prose under the failed agent's name loses the work *and*
+    // hides the failure from the routing evidence.
+    const alreadyFailed = [
+      ...(t.failedAgentIds ?? []),
+      ...(t.agentId ? [t.agentId] : []),
+    ];
+    const nextUp = routeTask({
+      phase: t.phase,
+      projectId,
+      excludeIds: alreadyFailed,
+    }).agentId;
+    if (nextUp) {
+      const escalated = scheduleStageRecovery(
+        p,
+        t,
+        err,
+        `Escalating **${t.title}** from ${agentName(t.agentId)} to ${agentName(nextUp)}.`,
+      );
+      if (escalated) return;
+    }
+
+    // Ladder exhausted (or retries used up): local synthesis so the stage
+    // still completes, recorded as simulated so it never counts as evidence.
     pushActivity({
       type: "info",
       message:
-        `Live agent unavailable (${err}) — using local synthesis for ${t.phase}.`,
+        `No agent could produce ${t.phase} (${err}) — using local synthesis.`,
       projectId,
       taskId,
       agentId: t.agentId ?? undefined,
@@ -1151,20 +1332,47 @@ function applyPhaseCompletion(
   }
 
   if (task.agentId) {
+    const simulated = output.backend.startsWith("simulation");
+    const taskClass = taskClassForPhase(task.phase);
+    // Price the run against the agent's actual cost tier rather than a flat
+    // per-token guess: local and plan-covered work is $0 at the margin, and
+    // only real spend may consume a budget.
+    // A simulated run is not on-device inference — labelling it "free-local"
+    // would attribute template synthesis to a real local model.
+    const { costUsd, tier } = simulated
+      ? { costUsd: 0, tier: "simulated" }
+      : costForRun(task.agentId, output.tokens);
+
     pushUsage({
       id: `use-${nanoid(8)}`,
       agentId: task.agentId,
       projectId: project.id,
       tokens: output.tokens,
-      costUsd: Number((output.tokens * 0.000002).toFixed(4)),
+      costUsd: Number(costUsd.toFixed(4)),
       latencyMs: output.latencyMs,
       createdAt: new Date().toISOString(),
+      taskClass,
+      costTier: tier,
     });
+
+    recordRoutingOutcome({
+      agentId: task.agentId,
+      taskClass,
+      ok: true,
+      tokens: output.tokens,
+      latencyMs: output.latencyMs,
+      costUsd,
+      simulated,
+    });
+
     const agent = getState().agents.find((a) => a.id === task.agentId);
     if (agent) {
       updateAgent(task.agentId, {
         metrics: {
           ...agent.metrics,
+          // Simulated phases must not masquerade as measurements.
+          source:
+            output.backend === "simulation" ? "simulated" : "measured",
           tokensUsed: agent.metrics.tokensUsed + output.tokens,
           avgLatencyMs: Math.round(
             (agent.metrics.avgLatencyMs + output.latencyMs) / 2,

@@ -276,6 +276,10 @@ function registerIpc() {
           cols: Number(opts.cols) || 120,
           rows: Number(opts.rows) || 36,
           cwd: opts.cwd ? String(opts.cwd) : undefined,
+          // Fleet governance resolved by the Cortex server; re-validated in
+          // pty-host before it reaches a spawn.
+          extraArgs: Array.isArray(opts.extraArgs) ? opts.extraArgs : [],
+          unsetEnv: Array.isArray(opts.unsetEnv) ? opts.unsetEnv : [],
         },
         emit,
       );

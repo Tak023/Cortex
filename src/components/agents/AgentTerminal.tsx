@@ -2,14 +2,76 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, BookMarked, Check, Loader2 } from "lucide-react";
+import {
+  ArrowLeft,
+  BookMarked,
+  Check,
+  CreditCard,
+  FolderOpen,
+  Loader2,
+  ShieldCheck,
+} from "lucide-react";
 import type { ExternalAgentId } from "@/lib/agents/externalAgents";
+import type { AgentLaunchPlan } from "@/lib/agents/governance";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
   agent: ExternalAgentId;
   label: string;
+  /** Per-session workspace override (?cwd= on the terminal route). */
+  cwd?: string;
 };
+
+const CHIP =
+  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] leading-none";
+
+function AuthChip({ plan }: { plan: AgentLaunchPlan }) {
+  const { billing, label, detail } = plan.auth;
+  const tone =
+    billing === "metered"
+      ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+      : billing === "subscription"
+        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+        : "border-border bg-white/5 text-muted";
+  return (
+    <span className={`${CHIP} ${tone}`} title={detail}>
+      <CreditCard className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
+function ApprovalChip({ plan }: { plan: AgentLaunchPlan }) {
+  const { applied, requested, detail } = plan.approval;
+  const drifted = requested !== "inherit" && applied === "inherit";
+  const tone = drifted
+    ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+    : applied === "auto"
+      ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
+      : applied === "inherit"
+        ? "border-border bg-white/5 text-muted"
+        : "border-sky-500/30 bg-sky-500/10 text-sky-300";
+  return (
+    <span className={`${CHIP} ${tone}`} title={detail}>
+      <ShieldCheck className="h-3 w-3" />
+      {applied === "inherit" ? "approval: CLI default" : `approval: ${applied}`}
+    </span>
+  );
+}
+
+function ScopeChip({ plan }: { plan: AgentLaunchPlan }) {
+  const tone =
+    plan.cwdScope === "home"
+      ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+      : "border-border bg-white/5 text-muted";
+  const short = plan.cwd.replace(/^\/Users\/[^/]+/, "~");
+  return (
+    <span className={`${CHIP} ${tone}`} title={`${plan.cwd} — ${plan.cwdDetail}`}>
+      <FolderOpen className="h-3 w-3" />
+      {short}
+    </span>
+  );
+}
 
 function decodeB64(b64: string): string {
   try {
@@ -24,17 +86,26 @@ function decodeB64(b64: string): string {
   }
 }
 
-export function AgentTerminal({ agent, label }: Props) {
+export function AgentTerminal({ agent, label, cwd }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
   const fitRef = useRef<import("@xterm/addon-fit").FitAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  /**
+   * Mirrors sessionIdRef for rendering. The ref is what the async callbacks
+   * read (they must see the latest id without re-subscribing), but a ref
+   * write does not re-render — reading it during render left the "Save to
+   * Second Brain" button's disabled state dependent on some *other* state
+   * change happening to fire afterwards.
+   */
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const useDesktopPtyRef = useRef(false);
   const [status, setStatus] = useState<
     "starting" | "running" | "exited" | "error"
   >("starting");
   const [error, setError] = useState<string | null>(null);
   const [displayCmd, setDisplayCmd] = useState<string>("");
+  const [plan, setPlan] = useState<AgentLaunchPlan | null>(null);
   const [savingToVault, setSavingToVault] = useState(false);
   const [vaultSavedPath, setVaultSavedPath] = useState<string | null>(null);
 
@@ -168,6 +239,27 @@ export function AgentTerminal({ agent, label }: Props) {
       // Prefer Electron main-process PTY (works in packaged app)
       if (desktopPty) {
         useDesktopPtyRef.current = true;
+
+        // Governance lives on the server so both transports agree on auth
+        // mode, workspace scope and approval flags.
+        let govPlan: AgentLaunchPlan | null = null;
+        let govArgs: string[] = [];
+        try {
+          const q = new URLSearchParams({ agent });
+          if (cwd) q.set("cwd", cwd);
+          const planRes = await fetch(`/api/agents/terminal?${q.toString()}`);
+          const resolved = (await planRes.json()) as {
+            governance?: AgentLaunchPlan;
+            args?: string[];
+          };
+          govPlan = resolved.governance ?? null;
+          govArgs = govPlan?.extraArgs ?? [];
+        } catch {
+          /* fall back to the CLI's own defaults */
+        }
+        if (disposed) return;
+        if (govPlan) setPlan(govPlan);
+
         unsubPty = desktopPty.onEvent((payload) => {
           if (payload.id !== sessionIdRef.current) return;
           if (payload.type === "data" && payload.data != null) {
@@ -184,7 +276,14 @@ export function AgentTerminal({ agent, label }: Props) {
           }
         });
 
-        const startData = await desktopPty.start({ agent, cols, rows });
+        const startData = await desktopPty.start({
+          agent,
+          cols,
+          rows,
+          cwd: govPlan?.cwd,
+          extraArgs: govArgs,
+          unsetEnv: govPlan?.unsetEnv ?? [],
+        });
         if (disposed) return;
 
         if (!startData.ok || !startData.session) {
@@ -197,6 +296,7 @@ export function AgentTerminal({ agent, label }: Props) {
         }
 
         sessionIdRef.current = startData.session.id;
+        setSessionId(startData.session.id);
         setDisplayCmd(startData.session.display);
         setStatus("running");
         document.title = `${startData.session.label} — Cortex`;
@@ -206,7 +306,7 @@ export function AgentTerminal({ agent, label }: Props) {
         const startRes = await fetch("/api/agents/terminal", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent, cols, rows }),
+          body: JSON.stringify({ agent, cols, rows, cwd }),
         });
         const startData = (await startRes.json()) as {
           ok?: boolean;
@@ -216,6 +316,7 @@ export function AgentTerminal({ agent, label }: Props) {
             id: string;
             display: string;
             label: string;
+            governance?: AgentLaunchPlan;
           };
         };
 
@@ -233,7 +334,9 @@ export function AgentTerminal({ agent, label }: Props) {
         }
 
         sessionIdRef.current = startData.session.id;
+        setSessionId(startData.session.id);
         setDisplayCmd(startData.session.display);
+        setPlan(startData.session.governance ?? null);
         setStatus("running");
         document.title = `${startData.session.label} — Cortex`;
 
@@ -307,12 +410,13 @@ export function AgentTerminal({ agent, label }: Props) {
         }
       }
       sessionIdRef.current = null;
+      setSessionId(null);
       termRef.current?.dispose();
       termRef.current = null;
       fitRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount once per agent
-  }, [agent, writeInput, resize]);
+    // One PTY per (agent, workspace) — changing either restarts the session.
+  }, [agent, cwd, writeInput, resize]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#07090f] text-foreground">
@@ -328,7 +432,16 @@ export function AgentTerminal({ agent, label }: Props) {
           </Link>
           <div className="h-4 w-px bg-border" />
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{label}</div>
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-medium">{label}</span>
+              {plan ? (
+                <span className="flex flex-wrap items-center gap-1">
+                  <AuthChip plan={plan} />
+                  <ApprovalChip plan={plan} />
+                  <ScopeChip plan={plan} />
+                </span>
+              ) : null}
+            </div>
             <div className="truncate font-mono text-[11px] text-muted">
               {displayCmd || "Starting…"}
             </div>
@@ -338,7 +451,7 @@ export function AgentTerminal({ agent, label }: Props) {
           <button
             type="button"
             onClick={handleSaveToVault}
-            disabled={savingToVault || !sessionIdRef.current}
+            disabled={savingToVault || !sessionId}
             title="Save session output to Obsidian second brain (daily note)"
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-panel-elevated/70 px-2.5 py-1 text-xs text-foreground/80 transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-300 disabled:opacity-40"
           >
@@ -377,6 +490,13 @@ export function AgentTerminal({ agent, label }: Props) {
       {error ? (
         <div className="border-b border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
           {error}
+        </div>
+      ) : null}
+      {plan?.notes.length ? (
+        <div className="border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90">
+          {plan.notes.map((n) => (
+            <div key={n}>{n}</div>
+          ))}
         </div>
       ) : null}
       <div ref={hostRef} className="min-h-0 flex-1 p-1" />

@@ -4,18 +4,26 @@ export function Card({
   children,
   className,
   onClick,
+  title,
+  id,
 }: {
   children: React.ReactNode;
   className?: string;
   onClick?: () => void;
+  /** Native tooltip — used to explain what a metric actually measures. */
+  title?: string;
+  /** Anchor target so other pages can deep-link to a settings section. */
+  id?: string;
 }) {
   return (
     <div
+      id={id}
       className={cn(
         "rounded-xl border border-border bg-panel/80 backdrop-blur-sm",
         className,
       )}
       onClick={onClick}
+      title={title}
     >
       {children}
     </div>

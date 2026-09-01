@@ -421,7 +421,8 @@ ${phases}
 }
 
 export function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
+  // \x1B is intentional — this strips ANSI escape sequences from captured
+  // terminal output. (`no-control-regex` is not enabled in this config.)
   return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
 }
 

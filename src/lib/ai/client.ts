@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { Concept } from "../types";
 import { nanoid } from "nanoid";
 
@@ -26,6 +29,39 @@ function getClient(): OpenAI | null {
 
 export function isAiConfigured(): boolean {
   return Boolean(process.env.XAI_API_KEY?.trim());
+}
+
+/**
+ * Claude for concept generation, alongside Grok.
+ *
+ * Activation is keyed on ANTHROPIC_API_KEY in *Cortex's* env (project
+ * `.env.local` in dev, `~/Library/Application Support/cortex/.env` on
+ * desktop). Deliberately not the shell environment: the shell export was
+ * removed because it silently switched Claude Code sessions from the Max plan
+ * to metered billing (review finding 01). Putting the key in Cortex's env
+ * scopes metered use to these SDK calls only.
+ */
+function getAnthropicClient(): Anthropic | null {
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) return null;
+  return new Anthropic({
+    apiKey: key,
+    // TypeScript SDK timeouts are milliseconds. Same rationale as
+    // XAI_TIMEOUT_MS above — but a measured Opus run took 81s (the model
+    // reasons before answering, unlike Grok), so Grok's 90s bound would
+    // time out healthy requests. Bounded at 4 minutes instead.
+    timeout: 240_000,
+    maxRetries: 1,
+  });
+}
+
+export function isClaudeConfigured(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+}
+
+/** Default Claude model for concept generation (override with CORTEX_CLAUDE_MODEL). */
+export function getClaudeModel(): string {
+  return process.env.CORTEX_CLAUDE_MODEL?.trim() || "claude-opus-5";
 }
 
 /** Default Grok model for interactive Jarvis chat (override with JARVIS_GROK_MODEL). */
@@ -93,77 +129,94 @@ export async function chatWithGrok(opts: {
 export type ConceptGeneration = {
   concepts: Concept[];
   /** Which engine actually produced the concepts */
-  source: "grok" | "local";
-  /** Model used when source === "grok" */
+  source: "grok" | "claude" | "local";
+  /** Model used when source is a live provider */
   model?: string;
-  /** Why Grok was not used (missing key, API error, parse failure, …) */
+  /** Why earlier providers were not used (missing key, API error, …) */
   fallbackReason?: string;
 };
 
 /**
  * Generate 10 concrete product concepts from a rough idea.
- * Uses Grok when XAI_API_KEY is set and the API call succeeds; otherwise
- * falls back to local synthesis and REPORTS WHY via `fallbackReason` so the
- * UI never silently pretends canned concepts came from Grok.
+ * Provider chain: Grok → Claude → local synthesis. Every fallback REPORTS WHY
+ * via `fallbackReason` so the UI never silently pretends canned concepts came
+ * from a live model.
  */
 export async function generateConcepts(
   statement: string,
   templateHint?: string,
   agentsUsed: string[] = ["Grok", "Hermes", "Claude Code"],
 ): Promise<ConceptGeneration> {
-  const client = getClient();
-  if (!client) {
-    return {
-      concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
-      source: "local",
-      fallbackReason: "XAI_API_KEY is not set",
-    };
+  // Provider chain: Grok first (the incumbent — adding Claude must not change
+  // behaviour for a Grok-configured machine), then Claude, then local
+  // synthesis. Each failure is carried forward so the UI can say exactly why
+  // a fallback happened rather than silently pretending.
+  const reasons: string[] = [];
+
+  const grok = getClient();
+  if (grok) {
+    const model = getGrokChatModel();
+    try {
+      const concepts = await generateWithGrok(
+        grok,
+        model,
+        statement,
+        templateHint,
+        agentsUsed,
+      );
+      return { concepts, source: "grok", model };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn("Grok concept generation failed:", reason);
+      reasons.push(`Grok: ${reason}`);
+    }
+  } else {
+    reasons.push("Grok: XAI_API_KEY is not set");
   }
-  const model = getGrokChatModel();
-  try {
-    const concepts = await generateWithGrok(
-      client,
-      model,
-      statement,
-      templateHint,
-      agentsUsed,
-    );
-    return { concepts, source: "grok", model };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    console.warn("Grok concept generation failed, falling back to local:", reason);
-    return {
-      concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
-      source: "local",
-      fallbackReason: reason,
-    };
+
+  const claude = getAnthropicClient();
+  if (claude) {
+    const model = getClaudeModel();
+    try {
+      const concepts = await generateWithClaude(
+        claude,
+        model,
+        statement,
+        templateHint,
+        agentsUsed,
+      );
+      return {
+        concepts,
+        source: "claude",
+        model,
+        fallbackReason: reasons.length ? reasons.join("; ") : undefined,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn("Claude concept generation failed:", reason);
+      reasons.push(`Claude: ${reason}`);
+    }
+  } else {
+    reasons.push("Claude: ANTHROPIC_API_KEY is not set in Cortex's env");
   }
+
+  return {
+    concepts: generateLocalConcepts(statement, templateHint, agentsUsed),
+    source: "local",
+    fallbackReason: reasons.join("; "),
+  };
 }
 
-async function generateWithGrok(
-  client: OpenAI,
-  model: string,
-  statement: string,
-  templateHint: string | undefined,
-  agentsUsed: string[],
-): Promise<Concept[]> {
-  const prompt = `You are the brainstorm coordinator for Cortex, a multi-agent OS.
+/** Shared brainstorm brief so Grok and Claude answer the same question. */
+function conceptBrief(statement: string, templateHint?: string): string {
+  return `You are the brainstorm coordinator for Cortex, a multi-agent OS.
 A user submitted this idea:
 """
 ${statement}
 """
 ${templateHint ? `Preferred product type: ${templateHint}` : ""}
 
-Return ONLY valid JSON (no markdown) as an array of 10 concept objects with this shape:
-{
-  "title": string,
-  "summary": string (2-3 sentences),
-  "features": string[] (4-6 concrete features),
-  "stack": string[] (3-6 technologies),
-  "difficulty": "easy" | "medium" | "hard",
-  "estimatedEffort": string (e.g. "1 week", "3-4 weeks"),
-  "score": number 0-100
-}
+Produce exactly 10 product concepts.
 
 HARD REQUIREMENTS:
 - Every concept must be a direct product take on the user's idea above — same
@@ -175,6 +228,86 @@ HARD REQUIREMENTS:
 - Pick the stack that genuinely fits each concept; vary stacks across
   concepts where justified rather than repeating one default stack.
 Be specific and actionable — these will feed a full build pipeline.`;
+}
+
+const ConceptListSchema = z.object({
+  concepts: z
+    .array(
+      z.object({
+        title: z.string(),
+        summary: z.string(),
+        features: z.array(z.string()),
+        stack: z.array(z.string()),
+        difficulty: z.enum(["easy", "medium", "hard"]),
+        estimatedEffort: z.string(),
+        score: z.number(),
+      }),
+    )
+    .min(1)
+    .max(10),
+});
+
+/**
+ * Claude path — structured outputs via `messages.parse`, which constrains the
+ * response to the schema server-side. No "find the outermost JSON array"
+ * scraping: the parse either returns typed concepts or throws, and the throw
+ * falls through to the next provider with its reason preserved.
+ */
+async function generateWithClaude(
+  client: Anthropic,
+  model: string,
+  statement: string,
+  templateHint: string | undefined,
+  agentsUsed: string[],
+): Promise<Concept[]> {
+  const response = await client.messages.parse({
+    model,
+    // Ten fully-specified concepts run ~4k output tokens; leave headroom.
+    max_tokens: 16000,
+    messages: [
+      { role: "user", content: conceptBrief(statement, templateHint) },
+    ],
+    output_config: { format: zodOutputFormat(ConceptListSchema) },
+  });
+
+  const parsed = response.parsed_output;
+  if (!parsed?.concepts?.length) {
+    throw new Error("Claude returned no concepts");
+  }
+  return parsed.concepts.slice(0, 10).map((c) => ({
+    id: `concept-${nanoid(8)}`,
+    title: c.title,
+    summary: c.summary,
+    features: c.features ?? [],
+    stack: c.stack ?? [],
+    difficulty: c.difficulty ?? "medium",
+    estimatedEffort: c.estimatedEffort ?? "2-3 weeks",
+    agentsUsed,
+    score: c.score ?? 70,
+  }));
+}
+
+async function generateWithGrok(
+  client: OpenAI,
+  model: string,
+  statement: string,
+  templateHint: string | undefined,
+  agentsUsed: string[],
+): Promise<Concept[]> {
+  // Same brief as Claude, plus the JSON-array instruction Grok needs since
+  // the xAI endpoint has no structured-output guarantee here.
+  const prompt = `${conceptBrief(statement, templateHint)}
+
+Return ONLY valid JSON (no markdown) as an array of 10 concept objects with this shape:
+{
+  "title": string,
+  "summary": string (2-3 sentences),
+  "features": string[] (4-6 concrete features),
+  "stack": string[] (3-6 technologies),
+  "difficulty": "easy" | "medium" | "hard",
+  "estimatedEffort": string (e.g. "1 week", "3-4 weeks"),
+  "score": number 0-100
+}`;
 
   const resp = await client.chat.completions.create(
     {
@@ -613,156 +746,59 @@ export function synthesizePhaseOutput(
     .map(([k, v]) => `### ${k}\n${v.slice(0, 400)}`)
     .join("\n\n");
 
+  /**
+   * Fallback documents, used only when no live agent produced the phase.
+   *
+   * These were previously demo copy describing Cortex itself — an
+   * "architecture" for a portfolio site would announce an Agent Registry and
+   * an Orchestrator, because the template named Cortex's own modules whatever
+   * the project was. That is worse than a placeholder: it is confident,
+   * well-formatted content about different software.
+   *
+   * They now derive strictly from the concept, assert nothing that was not
+   * supplied, and open with a banner saying no agent wrote them.
+   */
+  const banner =
+    "> **Template fallback — not agent output.** No live agent was available " +
+    "for this phase, so Cortex generated this outline from the concept. " +
+    "Connect an agent with a live adapter (Settings › Agents) to replace it.";
+
+  const conceptBlock = `## Concept\n${conceptSummary || "_none supplied_"}`;
+  const priorBlock = `## Prior phases\n${prior || "_none_"}`;
+
   const templates: Record<
     string,
     { summary: string; artifactName: string; content: string }
   > = {
     research: {
-      summary: `Research complete for "${projectName}": users, constraints, and competitive landscape mapped.`,
-      artifactName: "research-brief.md",
-      content: `# Research Brief — ${projectName}
-
-## Problem
-${conceptSummary}
-
-## Users
-- Primary: builders who orchestrate multiple AI agents
-- Secondary: solo developers wanting a command center
-
-## Constraints
-- Local-first preferred
-- Hybrid cloud + local models
-- Human-in-the-loop gates required
-
-## Findings
-- Fragmented tooling across Claude Code, Codex, Hermes, Grok, LM Studio
-- Strong demand for shared project memory and visible handoffs
-- Approval gates reduce runaway agent costs
-
-## Prior context
-${prior || "_none_"}
-`,
+      summary: `Research outline generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "research.md",
+      content: `# Research — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Questions this phase should answer\n- Who is this for, and what do they do today instead?\n- What constraints are fixed (platform, budget, data, timeline)?\n- What does success look like, measurably?\n- What comparable products exist, and where do they fall short?\n\n${priorBlock}\n`,
     },
     planning: {
-      summary: `Execution plan drafted with milestones, risks, and success metrics for "${projectName}".`,
-      artifactName: "execution-plan.md",
-      content: `# Execution Plan — ${projectName}
-
-## Goal
-${conceptSummary}
-
-## Milestones
-1. Scaffold workspace & agent registry
-2. Ideas → concepts flow
-3. Pipeline orchestration with approval gates
-4. Project Kanban + live activity
-5. Export & usage tracking
-
-## Risks
-- Agent CLI availability varies
-- API rate limits on cloud agents
-- Context drift across phases
-
-## Success metrics
-- Concept generation < 30s
-- Full pipeline visible on Kanban
-- Human can pause/reassign mid-flight
-
-## Depends on research
-${memory.research?.slice(0, 300) || "_pending_"}
-`,
+      summary: `Execution outline generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "planning.md",
+      content: `# Execution Plan — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Suggested milestones\n1. Define the smallest end-to-end slice that delivers the core value\n2. Build that slice\n3. Validate it against the success criteria from research\n4. Extend feature by feature, in priority order\n\n## Risks to resolve before building\n- Unstated assumptions in the concept\n- Dependencies not yet chosen or verified\n- Anything requiring credentials or third-party access\n\n${priorBlock}\n`,
     },
     architecture: {
-      summary: `System architecture defined: modules, data model, and agent routing for "${projectName}".`,
+      summary: `Architecture outline generated for "${projectName}" (template fallback — no agent ran).`,
       artifactName: "architecture.md",
-      content: `# Architecture — ${projectName}
-
-## Overview
-Local-first control plane with Next.js UI, file-backed state, and an in-process orchestration engine.
-
-## Modules
-- **Agent Registry** — status, strengths, config
-- **Router** — phase → best agent
-- **Orchestrator** — task graph, handoffs, approvals
-- **Workspace** — shared memory, artifacts, history
-- **Activity Bus** — real-time feed
-
-## Data model
-Agent, Idea, Concept, Project, Task, Artifact, ActivityEvent, UsageRecord
-
-## Handoff protocol
-Each phase writes artifacts into shared memory; next phase reads prior keys.
-
-## Prior
-${memory.planning?.slice(0, 300) || memory.research?.slice(0, 300) || "_none_"}
-`,
+      content: `# Architecture — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## What this document should contain\n- Component breakdown for *this* project, with responsibilities\n- Data model and where state lives\n- External interfaces and their contracts\n- Build, run and deploy shape\n- Decisions taken, with the alternatives rejected and why\n\nCortex cannot infer these from a concept summary alone; a live agent should write them.\n\n${priorBlock}\n`,
     },
     implementation: {
-      summary: `Core implementation for "${projectName}" scaffolded with primary flows wired.`,
-      artifactName: "implementation-notes.md",
-      content: `# Implementation Notes — ${projectName}
-
-## Delivered
-- UI shell with sidebar navigation
-- Agents panel with status & actions
-- Ideas → Generate Concepts → select
-- Project workspace with Kanban
-- Orchestration tick loop with approvals
-
-## Key files
-- \`src/lib/orchestration/engine.ts\`
-- \`src/lib/agents/router.ts\`
-- \`src/lib/store.ts\`
-- \`src/app/ideas/page.tsx\`
-- \`src/app/projects/[id]/page.tsx\`
-
-## Follow-ups
-- Wire real CLI adapters for Hermes / Claude Code / Codex
-- Stream SSE for activity feed
-`,
+      summary: `Implementation notes generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "implementation.md",
+      content: `# Implementation — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Note on scope\nCortex scaffolds a starter application from the concept — project name, summary, feature list and stack. It does **not** generate feature code, assets, branding or icons. Everything described in the concept beyond that scaffold still needs to be built.\n\n${priorBlock}\n`,
     },
     testing: {
-      summary: `Test plan executed for "${projectName}"; critical paths green with notes.`,
-      artifactName: "test-report.md",
-      content: `# Test Report — ${projectName}
-
-## Coverage
-- Concept generation (mock + live path)
-- Project creation from concept
-- Task transitions & approval gates
-- Agent status updates during run
-- Pause / resume / reassign
-
-## Results
-| Area | Status |
-|------|--------|
-| Ideas flow | PASS |
-| Routing | PASS |
-| Kanban | PASS |
-| Approvals | PASS |
-| Export | PASS |
-
-## Notes
-Simulation mode validates coordination without requiring all API keys.
-`,
+      summary: `Test outline generated for "${projectName}" (template fallback — no agent ran).`,
+      artifactName: "testing.md",
+      content: `# Testing — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Coverage this project needs\n- One test per feature listed in the concept\n- The critical end-to-end path a user actually follows\n- Failure and empty states\n\nThe generated scaffold ships smoke tests for itself only; they do not cover the concept's features.\n\n${priorBlock}\n`,
     },
     polish: {
-      summary: `Polish pass complete for "${projectName}": UX, copy, empty states, and export ready.`,
+      summary: `Release outline generated for "${projectName}" (template fallback — no agent ran).`,
       artifactName: "release-notes.md",
-      content: `# Release Notes — ${projectName}
-
-## Highlights
-- Dark command-center UI
-- Multi-agent concept brainstorm
-- Live pipeline with human gates
-- Project workspace + history export
-
-## Concept
-${conceptSummary}
-
-## Ready for
-Local demo, further agent adapter integration, and real API keys via Settings.
-`,
+      content: `# Release Notes — ${projectName}\n\n${banner}\n\n${conceptBlock}\n\n## Before calling this shippable\n- Every feature in the concept is implemented, not just scaffolded\n- Empty, loading and error states exist\n- Copy has been read end to end\n- Assets referenced by the concept (branding, icons, images) actually exist\n\n${priorBlock}\n`,
     },
   };
 
