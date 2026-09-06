@@ -113,10 +113,11 @@ export function ProviderUsageCards({ className }: { className?: string }) {
       <div className="flex items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-medium text-foreground/90">
-            Provider credits
+            Provider credits · billed by provider
           </h2>
           <p className="text-[11px] text-muted">
-            Claude Code · Grok · Hermes — tokens & spend this month
+            Claude Code · Grok · Hermes — provider-side billing, not Cortex&apos;s
+            own counter
             {fetchedAt ? (
               <span className="text-muted/70">
                 {" "}

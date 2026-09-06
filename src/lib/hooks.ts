@@ -142,10 +142,17 @@ export function useActivity(limit = 40, pollMs = 4000) {
 
 export function useMetrics(pollMs = 8000) {
   const [metrics, setMetrics] = useState<{
+    measuredTokens: number;
+    simulatedTokens: number;
+    seededTokens: number;
     totalTokens: number;
+    measuredAgents: number;
+    simulatedAgents: number;
+    seededAgents: number;
     costUsd: number;
-    avgLatencyMs: number;
-    successRate: number;
+    /** null until at least one agent has been measured. */
+    avgLatencyMs: number | null;
+    successRate: number | null;
     agentsOnline: number;
     agentsBusy: number;
     projectsActive: number;
@@ -171,6 +178,51 @@ export function useMetrics(pollMs = 8000) {
   useInterval(load, pollMs);
 
   return metrics;
+}
+
+export type FleetHealthRow = {
+  id: string;
+  label: string;
+  installed: boolean;
+  command: string | null;
+  version: string | null;
+  auth: { label: string; billing: string; detail: string };
+  approval: { requested: string; applied: string; detail: string };
+  workspace: { cwd: string; scope: string; detail: string };
+  notes: string[];
+  detail: string;
+};
+
+/**
+ * Live state of the installed agent CLIs. Read on demand rather than polled —
+ * each row costs a `--version` probe (server-side cached), and none of it
+ * changes between renders.
+ */
+export function useFleetHealth() {
+  const [rows, setRows] = useState<FleetHealthRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await json<{ agents: FleetHealthRow[] }>(
+        "/api/agents/health",
+      );
+      setRows(data.agents || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fleet health failed");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { rows, loading, error, refresh };
 }
 
 export function useIdeas() {

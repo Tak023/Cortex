@@ -15,19 +15,39 @@ import { ProviderUsageCards } from "@/components/command/ProviderUsageCards";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
-import { useActivity, useAgents, useMetrics, useProjects } from "@/lib/hooks";
-import { cn, formatTokens, statusColor } from "@/lib/utils";
+import {
+  useActivity,
+  useAgents,
+  useMetrics,
+  useProjects,
+  useSettings,
+} from "@/lib/hooks";
+import { cn, formatTokens, metricProvenance, statusColor } from "@/lib/utils";
 
 export default function CommandCenterPage() {
   const { agents } = useAgents(5000);
   const { projects } = useProjects(5000);
   const activity = useActivity(30, 4000);
   const metrics = useMetrics(8000);
+  const { settings } = useSettings();
+  const showSeeded = settings?.showSeededMetrics ?? true;
 
   const busy = agents.filter((a) => a.status === "busy");
   const activeProjects = projects.filter(
     (p) => p.status === "running" || p.status === "awaiting_approval",
   );
+
+  // Two token meters exist in this app: what the providers bill (the cards
+  // above) and what Cortex itself observed (this tile). They measure different
+  // things and must never share a label.
+  const unmeasuredTokens = metrics
+    ? metrics.simulatedTokens + metrics.seededTokens
+    : 0;
+  const tokenSub = metrics
+    ? unmeasuredTokens > 0
+      ? `+${formatTokens(unmeasuredTokens)} seeded/sim · $${metrics.costUsd.toFixed(3)} est.`
+      : `$${metrics.costUsd.toFixed(3)} est.`
+    : "—";
 
   return (
     <>
@@ -64,21 +84,31 @@ export default function CommandCenterPage() {
               icon: FolderKanban,
             },
             {
-              label: "Tokens used",
-              value: metrics ? formatTokens(metrics.totalTokens) : "—",
-              sub: `$${metrics?.costUsd?.toFixed(3) ?? "0"} est.`,
+              label: "Tokens · tracked by Cortex",
+              value: metrics ? formatTokens(metrics.measuredTokens) : "—",
+              sub: tokenSub,
               icon: Zap,
+              title:
+                "Measured by Cortex for work it orchestrated. Provider billing is on the cards above and will not match.",
             },
             {
-              label: "Success rate",
-              value: metrics
-                ? `${Math.round(metrics.successRate * 100)}%`
-                : "—",
-              sub: `${metrics?.avgLatencyMs ?? "—"}ms avg`,
+              label: "Success rate · measured",
+              value:
+                metrics?.successRate != null
+                  ? `${Math.round(metrics.successRate * 100)}%`
+                  : "—",
+              sub:
+                metrics == null
+                  ? "—"
+                  : metrics.measuredAgents === 0
+                    ? "no agent measured yet"
+                    : `${metrics.avgLatencyMs ?? "—"}ms avg · ${metrics.measuredAgents} agent${metrics.measuredAgents > 1 ? "s" : ""}`,
               icon: Activity,
+              title:
+                "Averaged over agents that have actually run. Registry placeholders are excluded.",
             },
           ].map((m) => (
-            <Card key={m.label}>
+            <Card key={m.label} title={"title" in m ? (m.title as string) : undefined}>
               <CardBody className="flex items-start justify-between !py-3.5">
                 <div>
                   <div className="text-xs text-muted">{m.label}</div>
@@ -115,7 +145,12 @@ export default function CommandCenterPage() {
                     Cortex fully and reopen, or run a fresh desktop build.
                   </div>
                 ) : (
-                  agents.map((agent) => (
+                  agents.map((agent) => {
+                    const prov = metricProvenance(
+                      agent.metrics.source,
+                      showSeeded,
+                    );
+                    return (
                     <div
                       key={agent.id}
                       className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-panel-elevated/40 px-3 py-2.5"
@@ -134,11 +169,25 @@ export default function CommandCenterPage() {
                             agent.roles.slice(0, 3).join(" · ")}
                         </div>
                       </div>
-                      <div className="shrink-0 text-right text-[11px] tabular-nums text-muted">
-                        {formatTokens(agent.metrics.tokensUsed)} tok
+                      <div
+                        className={cn(
+                          "shrink-0 text-right text-[11px] tabular-nums text-muted",
+                          prov.className,
+                        )}
+                        title={prov.title}
+                      >
+                        {prov.render
+                          ? `${formatTokens(agent.metrics.tokensUsed)} tok`
+                          : "—"}
+                        {prov.chip ? (
+                          <span className="ml-1 text-[9px] uppercase text-amber-300/80">
+                            {prov.chip}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </CardBody>
             </Card>

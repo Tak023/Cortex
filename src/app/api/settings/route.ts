@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/store";
-import { isAiConfigured } from "@/lib/ai/client";
+import { isAiConfigured, isClaudeConfigured } from "@/lib/ai/client";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +9,7 @@ export async function GET() {
     settings: {
       ...getSettings(),
       xaiApiKeySet: isAiConfigured(),
+      anthropicApiKeySet: isClaudeConfigured(),
     },
   });
 }
@@ -29,6 +30,75 @@ export async function PATCH(req: Request) {
     body.voiceInputMode === "builtin" ||
     body.voiceInputMode === "external"
       ? { voiceInputMode: body.voiceInputMode }
+      : {}),
+    ...(body.agentApprovalPolicy === "inherit" ||
+    body.agentApprovalPolicy === "read-only" ||
+    body.agentApprovalPolicy === "ask" ||
+    body.agentApprovalPolicy === "auto"
+      ? { agentApprovalPolicy: body.agentApprovalPolicy }
+      : {}),
+    ...(body.agentWorkspaceScope === "project" ||
+    body.agentWorkspaceScope === "custom" ||
+    body.agentWorkspaceScope === "home"
+      ? { agentWorkspaceScope: body.agentWorkspaceScope }
+      : {}),
+    ...(typeof body.agentWorkspaceDir === "string"
+      ? { agentWorkspaceDir: body.agentWorkspaceDir }
+      : {}),
+    ...(body.claudeAuthPreference === "auto" ||
+    body.claudeAuthPreference === "subscription" ||
+    body.claudeAuthPreference === "api-key"
+      ? { claudeAuthPreference: body.claudeAuthPreference }
+      : {}),
+    ...(typeof body.showSeededMetrics === "boolean"
+      ? { showSeededMetrics: body.showSeededMetrics }
+      : {}),
+    ...(typeof body.codegenEnabled === "boolean"
+      ? { codegenEnabled: body.codegenEnabled }
+      : {}),
+    ...(body.routingPolicy === "quality-first" ||
+    body.routingPolicy === "cost-aware" ||
+    body.routingPolicy === "local-first"
+      ? { routingPolicy: body.routingPolicy }
+      : {}),
+    ...(typeof body.routingMinSuccessRate === "number"
+      ? {
+          routingMinSuccessRate: Math.min(
+            1,
+            Math.max(0, body.routingMinSuccessRate),
+          ),
+        }
+      : {}),
+    ...(typeof body.routingMinAttempts === "number"
+      ? {
+          routingMinAttempts: Math.max(
+            1,
+            Math.round(body.routingMinAttempts),
+          ),
+        }
+      : {}),
+    ...(typeof body.routingExploreUnproven === "boolean"
+      ? { routingExploreUnproven: body.routingExploreUnproven }
+      : {}),
+    // null clears a cap; a non-positive number is treated as "uncapped" too,
+    // so an empty input can never mean "block everything".
+    ...(body.dailyBudgetUsd === null || typeof body.dailyBudgetUsd === "number"
+      ? {
+          dailyBudgetUsd:
+            typeof body.dailyBudgetUsd === "number" && body.dailyBudgetUsd > 0
+              ? body.dailyBudgetUsd
+              : null,
+        }
+      : {}),
+    ...(body.projectBudgetUsd === null ||
+    typeof body.projectBudgetUsd === "number"
+      ? {
+          projectBudgetUsd:
+            typeof body.projectBudgetUsd === "number" &&
+            body.projectBudgetUsd > 0
+              ? body.projectBudgetUsd
+              : null,
+        }
       : {}),
     ...(typeof body.vaultEnabled === "boolean"
       ? { vaultEnabled: body.vaultEnabled }
@@ -71,6 +141,10 @@ export async function PATCH(req: Request) {
       : {}),
   });
   return NextResponse.json({
-    settings: { ...settings, xaiApiKeySet: isAiConfigured() },
+    settings: {
+      ...settings,
+      xaiApiKeySet: isAiConfigured(),
+      anthropicApiKeySet: isClaudeConfigured(),
+    },
   });
 }

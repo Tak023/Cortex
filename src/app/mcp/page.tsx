@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Plug,
   Shield,
+  ShieldAlert,
   Trash2,
   XCircle,
 } from "lucide-react";
@@ -75,6 +76,8 @@ export default function McpPage() {
   const [calling, setCalling] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [lanceInfo, setLanceInfo] = useState<string | null>(null);
+  const [dismissedDenials, setDismissedDenials] = useState<string[]>([]);
+  const [grantNote, setGrantNote] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -205,6 +208,80 @@ export default function McpPage() {
     }
   };
 
+  /**
+   * Unresolved denials, newest first and deduplicated per
+   * (agent, server, tool) — the same blocked call repeating in the log is one
+   * decision, not three.
+   */
+  const pendingDenials = (() => {
+    const seen = new Set<string>();
+    const out: Array<{
+      key: string;
+      agentId: string;
+      serverId: string;
+      tool: string;
+      at: string;
+      reason: string;
+      count: number;
+    }> = [];
+    for (const e of audit) {
+      if (e.status !== "denied") continue;
+      const key = `${e.agentId}|${e.serverId}|${e.tool}`;
+      const existing = out.find((d) => d.key === key);
+      if (existing) {
+        existing.count += 1;
+        continue;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        key,
+        agentId: e.agentId,
+        serverId: e.serverId,
+        tool: e.tool,
+        at: e.at,
+        reason: e.error || "Denied by policy",
+        count: 1,
+      });
+    }
+    return out.filter((d) => !dismissedDenials.includes(d.key));
+  })();
+
+  const resolveDenial = async (
+    d: { agentId: string; serverId: string; tool: string; key: string },
+    scope: "once" | "always",
+  ) => {
+    setGrantNote(null);
+    try {
+      const res = await fetch("/api/mcp/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId: d.agentId,
+          serverId: d.serverId,
+          tool: d.tool,
+          scope,
+        }),
+      });
+      const json = (await res.json()) as { error?: string; expiresAt?: string };
+      if (!res.ok) throw new Error(json.error || "Grant failed");
+      setGrantNote(
+        scope === "once"
+          ? `Granted once — ${d.serverId}/${d.tool} for ${d.agentId} (expires ${
+              json.expiresAt
+                ? new Date(json.expiresAt).toLocaleTimeString()
+                : "shortly"
+            })`
+          : `${d.serverId}/${d.tool} is now permanently allowed for ${d.agentId}`,
+      );
+      setDismissedDenials((prev) => [...prev, d.key]);
+    } catch (e) {
+      setGrantNote(e instanceof Error ? e.message : "Grant failed");
+    } finally {
+      await refresh();
+    }
+  };
+
   const copyExport = async () => {
     try {
       await navigator.clipboard.writeText(exportJson);
@@ -227,8 +304,14 @@ export default function McpPage() {
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-panel-elevated/50 px-4 py-3 text-sm">
           <Plug className="h-4 w-4 text-accent" />
+          {/*
+            The SDK client renders as a card in the same grid, so a bare
+            "7 ready" next to 8 cards reads as an off-by-one. Say the
+            denominator out loud.
+          */}
           <span className="font-medium">
-            {enabledCount} enabled · {readyCount} ready
+            {enabledCount} enabled · {readyCount} ready of {servers.length}{" "}
+            servers
           </span>
           <span className="text-muted">
             Keys live in{" "}
@@ -263,6 +346,9 @@ export default function McpPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-sm font-medium">{runtime.name}</span>
+                      <Badge className="bg-white/5 text-muted border-border">
+                        client · not a server
+                      </Badge>
                       <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/25">
                         ready
                       </Badge>
@@ -597,6 +683,77 @@ export default function McpPage() {
             ) : null}
           </CardBody>
         </Card>
+
+        {pendingDenials.length > 0 || grantNote ? (
+          <Card className="border-amber-500/30">
+            <CardHeader>
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <ShieldAlert className="h-4 w-4 text-amber-400" />
+                Permission decisions
+                <span className="text-[11px] font-normal text-muted">
+                  a denial is a decision point, not an error
+                </span>
+              </span>
+            </CardHeader>
+            <CardBody className="space-y-2">
+              {grantNote ? (
+                <p className="text-[11px] text-emerald-300/90">{grantNote}</p>
+              ) : null}
+              {pendingDenials.map((d) => (
+                <div
+                  key={d.key}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[12px]">
+                      <span className="font-medium">{d.agentId}</span>
+                      <span className="text-muted"> wants </span>
+                      <span className="font-mono">
+                        {d.serverId}/{d.tool}
+                      </span>
+                      {d.count > 1 ? (
+                        <span className="ml-1 text-[10px] text-muted">
+                          ×{d.count}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-[11px] text-muted">
+                      {d.reason} · {formatRelative(d.at)}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void resolveDenial(d, "once")}
+                    >
+                      Grant once
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void resolveDenial(d, "always")}
+                    >
+                      Grant always
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setDismissedDenials((prev) => [...prev, d.key])
+                      }
+                    >
+                      Deny
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </CardBody>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>

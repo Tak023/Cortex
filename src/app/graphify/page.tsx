@@ -189,6 +189,31 @@ export default function GraphifyPage() {
                   {graph.notice}
                 </p>
               )}
+              {graph?.freshness?.stale && (
+                <div className="space-y-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-200">
+                  <p>
+                    <strong className="font-medium">Index is behind.</strong>{" "}
+                    {graph.freshness.indexedNoteCount} of{" "}
+                    {graph.freshness.vaultNoteCount} notes indexed
+                    {graph.freshness.changedSinceBuild > 0
+                      ? `, ${graph.freshness.changedSinceBuild} changed since the build`
+                      : ""}
+                    .
+                  </p>
+                  <p className="text-amber-200/80">
+                    Rebuild the semantic layer with{" "}
+                    <code>/graphify</code> in the vault, or switch to{" "}
+                    <button
+                      type="button"
+                      onClick={() => selectLayer("wikilinks")}
+                      className="underline underline-offset-2 hover:text-amber-100"
+                    >
+                      Live links
+                    </button>{" "}
+                    for the current structure.
+                  </p>
+                </div>
+              )}
               {data?.vault?.dir && (
                 <p className="truncate font-mono text-[10px] text-muted/70" title={data.vault.dir}>
                   {data.vault.dir}

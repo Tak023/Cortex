@@ -9,6 +9,7 @@ import {
   EXTERNAL_AGENTS,
   type ExternalAgentId,
 } from "./externalAgents";
+import { buildLaunchPlan, type AgentLaunchPlan } from "./governance";
 
 export type ResolvedAgentCommand = {
   ok: boolean;
@@ -21,6 +22,20 @@ export type ResolvedAgentCommand = {
   /** Human-readable command line for display. */
   display: string;
   detail: string;
+  /** Auth mode, approval posture and workspace scope decided by Cortex. */
+  governance?: AgentLaunchPlan;
+};
+
+export type ResolveOptions = {
+  /** Per-session working directory override. */
+  cwd?: string;
+  /**
+   * Set false to skip fleet governance and get the raw binary lookup
+   * (equivalent to calling `resolveAgentBinary`).
+   */
+  govern?: boolean;
+  /** Skip the `--help` probe when applying approval flags (tests / speed). */
+  probeApproval?: boolean;
 };
 
 function exists(p: string | undefined | null): p is string {
@@ -84,7 +99,12 @@ function fail(agent: ExternalAgentId, detail: string): ResolvedAgentCommand {
   };
 }
 
-export function resolveAgentCommand(id: ExternalAgentId): ResolvedAgentCommand {
+/**
+ * Resolve the CLI binary only — no governance, no child processes touched.
+ * Callers that are about to *spawn* should use `resolveAgentCommand` so the
+ * fleet approval policy and workspace scope are applied.
+ */
+export function resolveAgentBinary(id: ExternalAgentId): ResolvedAgentCommand {
   switch (id) {
     case "hermes": {
       const bin = whichLike([
@@ -167,4 +187,43 @@ export function resolveAgentCommand(id: ExternalAgentId): ResolvedAgentCommand {
     default:
       return fail(id, `Unknown agent: ${id}`);
   }
+}
+
+/**
+ * Resolve the CLI *and* the governance around it: which credential wins, which
+ * directory the process may see, and which approval flags to pass.
+ *
+ * The approval flags are only added when the installed CLI advertises them in
+ * its own `--help`, so a policy can never break a launch.
+ */
+export function resolveAgentCommand(
+  id: ExternalAgentId,
+  opts: ResolveOptions = {},
+): ResolvedAgentCommand {
+  const base = resolveAgentBinary(id);
+  if (opts.govern === false) return base;
+
+  let governance: AgentLaunchPlan;
+  try {
+    governance = buildLaunchPlan({
+      agent: id,
+      command: base.ok ? base.command : undefined,
+      cwd: opts.cwd,
+      probeApproval: opts.probeApproval,
+    });
+  } catch {
+    // Governance must never be the reason a terminal fails to open.
+    return base;
+  }
+
+  const args = [...base.args, ...governance.extraArgs];
+  return {
+    ...base,
+    args,
+    cwd: governance.cwd,
+    display: base.command
+      ? [base.command, ...args].join(" ")
+      : base.display,
+    governance,
+  };
 }

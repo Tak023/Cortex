@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cortex — Review Response</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+  @page :first { margin: 0; }
+
+  :root{
+    --ink:#12151c; --muted:#5b6472; --faint:#8b95a8;
+    --rule:#e3e7ee; --rule2:#eef1f6;
+    --red:#b3261e; --amber:#8a5a00; --green:#1b6b45; --blue:#2f4fa8;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    color:var(--ink); font-size:9.6pt; line-height:1.5; margin:0;
+    -webkit-font-smoothing:antialiased;
+  }
+  code,.mono{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:8.3pt;
+    background:#f4f6fa; padding:0.5pt 3pt; border-radius:3px; color:#2a3140;
+  }
+
+  .cover{
+    height:297mm; padding:28mm 22mm; color:#fff;
+    background:linear-gradient(155deg,#141a2b 0%,#1d2740 55%,#243154 100%);
+    page-break-after:always; position:relative;
+  }
+  .cover .kicker{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:8.2pt;
+    letter-spacing:2.6px; text-transform:uppercase; color:#9db0d8; margin-bottom:22mm;
+  }
+  .cover h1{ font-size:37pt; line-height:1.04; margin:0; font-weight:600; letter-spacing:-0.6px; }
+  .cover h1 span{ color:#8fa9e8; }
+  .cover .rule{ width:52mm; height:2px; background:#5a76c4; margin:9mm 0; }
+  .cover .lede{ font-size:11.5pt; line-height:1.55; color:#d5ddf0; max-width:122mm; }
+  .cover .meta{
+    position:absolute; left:22mm; right:22mm; bottom:22mm;
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:8.4pt; color:#93a3c4;
+  }
+  .stats{ display:flex; gap:11mm; margin-bottom:8mm; }
+  .stat .n{ font-size:22pt; color:#fff; font-weight:600; line-height:1; }
+  .stat .l{ font-size:7pt; letter-spacing:1.4px; text-transform:uppercase; color:#8b9dc2; margin-top:2.5mm; }
+  .cover .meta .div{ border-top:1px solid #35406090; padding-top:5mm; }
+
+  h2.part{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:7.8pt; letter-spacing:2.4px; text-transform:uppercase;
+    color:var(--blue); margin:0 0 2mm; font-weight:600;
+  }
+  h3.sec{ font-size:20pt; margin:0 0 2mm; font-weight:600; letter-spacing:-0.3px; }
+  h4{ font-size:11pt; margin:6mm 0 2mm; }
+  .sec-lede{ color:var(--muted); font-size:9.4pt; margin:0 0 4mm; max-width:152mm; }
+  .hr{ border-top:2px solid var(--ink); margin:0 0 6mm; }
+  section{ page-break-before:always; }
+  section.first{ page-break-before:avoid; }
+
+  .f{ border:1px solid var(--rule); border-radius:5px; margin-bottom:4.5mm; page-break-inside:avoid; overflow:hidden; }
+  .f-h{ display:flex; align-items:baseline; gap:3mm; padding:2.6mm 3.5mm; background:#f8fAfc; border-bottom:1px solid var(--rule2); }
+  .tag{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:6.6pt; font-weight:700;
+    letter-spacing:0.9px; padding:1.1mm 2mm; border-radius:3px; white-space:nowrap;
+  }
+  .t-p0{ background:#fdeceb; color:var(--red); }
+  .t-p1{ background:#fdf3e0; color:var(--amber); }
+  .t-p2{ background:#eef1f6; color:var(--muted); }
+  .f-h .title{ font-weight:600; font-size:10.5pt; flex:1; }
+  .status{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:6.8pt;
+    letter-spacing:0.7px; text-transform:uppercase; font-weight:600; white-space:nowrap;
+  }
+  .s-done{ color:var(--green); } .s-part{ color:var(--amber); } .s-no{ color:var(--faint); }
+  .f-b{ padding:3mm 3.5mm 3.2mm; }
+  .row{ display:flex; gap:3mm; margin-bottom:1.8mm; }
+  .row:last-child{ margin-bottom:0; }
+  .row .k{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:6.9pt; letter-spacing:0.9px;
+    text-transform:uppercase; color:var(--faint); width:20mm; flex:none; padding-top:0.7mm;
+  }
+  .row .v{ flex:1; }
+  .row .v p{ margin:0 0 1.4mm; } .row .v p:last-child{ margin:0; }
+
+  table{ width:100%; border-collapse:collapse; font-size:8.8pt; margin:0 0 4mm; }
+  th{
+    text-align:left; font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:6.9pt;
+    letter-spacing:1px; text-transform:uppercase; color:var(--faint);
+    border-bottom:1px solid var(--rule); padding:0 2.5mm 1.5mm 0; font-weight:600;
+  }
+  td{ padding:1.9mm 2.5mm 1.9mm 0; border-bottom:1px solid var(--rule2); vertical-align:top; }
+  tr{ page-break-inside:avoid; }
+  thead{ display:table-header-group; }
+  td.num{ font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .callout{
+    border-left:3px solid var(--blue); background:#f5f8ff;
+    padding:3mm 4mm; margin:0 0 5mm; page-break-inside:avoid;
+  }
+  .callout .lbl{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:6.9pt; letter-spacing:1.4px;
+    text-transform:uppercase; color:var(--blue); font-weight:600; margin-bottom:1.5mm;
+  }
+  .callout p{ margin:0 0 2mm; } .callout p:last-child{ margin:0; }
+  .callout.warn{ border-left-color:var(--amber); background:#fffaf0; }
+  .callout.warn .lbl{ color:var(--amber); }
+  .callout.self{ border-left-color:var(--red); background:#fff6f5; }
+  .callout.self .lbl{ color:var(--red); }
+  .callout.good{ border-left-color:var(--green); background:#f3faf6; }
+  .callout.good .lbl{ color:var(--green); }
+  ul{ margin:0 0 3mm; padding-left:4.5mm; } li{ margin-bottom:1.4mm; }
+  .foot{
+    margin-top:7mm; padding-top:3mm; border-top:1px solid var(--rule);
+    font-size:7.6pt; color:var(--faint);
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="kicker">Response to independent review &middot; August&ndash;September 2026</div>
+  <h1>Cortex<br><span>What was wrong,<br>and what changed</span></h1>
+  <div class="rule"></div>
+  <p class="lede">
+    All ten findings from the technical review of v0.2.11, plus twenty-five further defects
+    surfaced while fixing them &mdash; ending with what the review's premise demanded and
+    the codebase could not do when it arrived: the pipeline now builds working software,
+    proven by two applications generated, tested, and verified end to end.
+  </p>
+  <div class="meta">
+    <div class="stats">
+      <div class="stat"><div class="n">10</div><div class="l">Review<br>findings</div></div>
+      <div class="stat"><div class="n">25</div><div class="l">Further defects<br>found &amp; fixed</div></div>
+      <div class="stat"><div class="n">7</div><div class="l">Failures in<br>this work</div></div>
+      <div class="stat"><div class="n">102</div><div class="l">Automated<br>checks</div></div>
+      <div class="stat"><div class="n">12</div><div class="l">Commits<br>pushed</div></div>
+    </div>
+    <div class="div">
+      Subject: <strong style="color:#c9d5ec">Cortex v0.2.11 &rarr; v0.2.12-dev</strong> &nbsp;&middot;&nbsp;
+      Branch: <span class="mono" style="background:#ffffff14;color:#c9d5ec">review-findings-0.2.12</span>
+      &nbsp;&middot;&nbsp; 83 files, +7,769 / &minus;398<br>
+      Source review: <em>Cortex &mdash; Agentic OS</em>, prepared from 24 screenshots without source access.
+      This response had full source access, a live machine, and repeated real pipeline runs.
+    </div>
+  </div>
+</div>
+
+<!-- ══ SUMMARY ══ -->
+<section class="first">
+  <h2 class="part">Part one</h2>
+  <h3 class="sec">Summary</h3>
+  <p class="sec-lede">What the review got right, what it got wrong, the larger problem underneath, and where it ended.</p>
+  <div class="hr"></div>
+
+  <p style="margin-top:0">
+    The review's three P0s shared a single root cause: <strong>Cortex displayed state it did not
+    govern.</strong> Each agent CLI decided its own authentication, working directory and approval
+    posture, and the interface rendered whatever those defaults happened to be &mdash; next to seeded
+    registry metrics drawn in the same style as measured ones. The fix was one module that makes those
+    decisions explicitly, plus provenance on every number shown.
+  </p>
+
+  <div class="callout">
+    <div class="lbl">The finding underneath the findings</div>
+    <p>
+      Finding 06 argued that every task was routed to the expensive lane. The conclusion was right;
+      the mechanism was not. <strong>Ten of thirteen agents had no live adapter at all.</strong> The
+      pipeline never called Claude, Codex or Grok &mdash; it simulated them under their names.
+    </p>
+    <p>
+      Following that thread led to the real gap: <strong>the Implementation phase did not write
+      software</strong> &mdash; it emitted a fixed starter page interpolating four concept fields, and
+      no assets at any point. And fixing <em>that</em> exposed the deepest defect of all: even a
+      perfect generation was destroyed thirty seconds later, because <strong>the Testing phase
+      overwrote the app with the placeholder</strong>, generated tests asserting the placeholder's
+      structure, passed them, and reported success. Five defects stacked, each hiding the next; none
+      visible in a screenshot; every one found by running real projects and refusing to accept the
+      green pipeline as proof.
+    </p>
+  </div>
+
+  <div class="callout good">
+    <div class="lbl">Where it ended</div>
+    <p>
+      Two applications now exist that Cortex built end to end on this machine, verified by loading
+      them and reading the result, not by trusting phase status: <strong>Ember &amp; Grind</strong>
+      (55 files &mdash; branded roastery site with logo, favicon, shop with origin/roast/tasting-note
+      data, per-bean detail pages, brew guides with a ratio calculator) and an
+      <strong>OpenTheory community forum</strong> (84 files &mdash; dynamic routes, component library,
+      data layer, its own e2e tests). Six phases green, and &mdash; for the first time &mdash; the
+      green meaning what it says.
+    </p>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:12mm">#</th><th>Finding</th><th style="width:26mm">Priority</th><th style="width:30mm">Outcome</th></tr></thead>
+    <tbody>
+      <tr><td class="num">01</td><td>Claude auth falling through to metered billing</td><td>P0 &middot; Cost</td><td class="s-done status">Resolved</td></tr>
+      <tr><td class="num">02</td><td>Every agent rooted at the home directory</td><td>P0 &middot; Safety</td><td class="s-done status">Resolved</td></tr>
+      <tr><td class="num">03</td><td>Approval policy inherited, not governed</td><td>P0 &middot; Safety</td><td class="s-part status">Resolved where verifiable</td></tr>
+      <tr><td class="num">04</td><td>Config truth split; display layer lying</td><td>P1 &middot; Correctness</td><td class="s-part status">Partial</td></tr>
+      <tr><td class="num">05</td><td>Real and simulated metrics indistinguishable</td><td>P1 &middot; Trust</td><td class="s-done status">Resolved</td></tr>
+      <tr><td class="num">06</td><td>No routing policy, only a registry</td><td>P1 &middot; Cost</td><td class="s-done status">Resolved</td></tr>
+      <tr><td class="num">07</td><td>MCP denials logged, not resolved</td><td>P1 &middot; UX</td><td class="s-done status">Resolved</td></tr>
+      <tr><td class="num">08</td><td>Vault index stale; session capture manual</td><td>P1 &middot; Data</td><td class="s-part status">Partial</td></tr>
+      <tr><td class="num">09</td><td>No fleet health view; versions drifting</td><td>P2 &middot; Ops</td><td class="s-part status">Partial</td></tr>
+      <tr><td class="num">10</td><td>Smaller hygiene items (five)</td><td>P2 &middot; Hygiene</td><td class="s-part status">3 of 5</td></tr>
+    </tbody>
+  </table>
+
+  <p style="margin-bottom:0">
+    Beyond the review: concept generation gained Claude as a second live provider (Grok &rarr; Claude
+    &rarr; local, every fallback carrying its reason), and the orphaned-server family &mdash; which
+    twice made a working build look broken and a broken verification look sound &mdash; was closed for
+    both generated apps and Cortex itself. Verification details in Part Five.
+  </p>
+</section>
+
+<!-- ══ FINDINGS ══ -->
+<section>
+  <h2 class="part">Part two</h2>
+  <h3 class="sec">The ten review findings</h3>
+  <p class="sec-lede">For each: what the review observed, what was actually wrong in the code, what changed, and what was left.</p>
+  <div class="hr"></div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p0">P0 · COST</span><span class="title">01 — Claude auth falling through to metered API billing</span><span class="status s-done">Resolved</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Observed</div><div class="v"><p>Terminal warned that both a claude.ai session and <code>ANTHROPIC_API_KEY</code> were set; header read "API Usage Billing" while the plan showed 0% of its window used. $160.53 Claude spend against $0.37 on Grok.</p></div></div>
+      <div class="row"><div class="k">Confirmed</div><div class="v"><p>Exactly as described. <code>~/.claude/.credentials.json</code> present <em>and</em> <code>ANTHROPIC_API_KEY</code> exported from <code>~/.zshrc</code> line 4. The environment variable wins, so every token was metered while the subscription sat idle.</p></div></div>
+      <div class="row"><div class="k">Fixed</div><div class="v">
+        <p>New <code>governance.ts</code> detects both credentials and removes <code>ANTHROPIC_API_KEY</code> and <code>ANTHROPIC_AUTH_TOKEN</code> from the spawned process. A billing chip in the terminal header and fleet health strip makes the active mode visible; <code>claudeAuthPreference</code> allows metered billing to be chosen deliberately.</p>
+        <p>Closed at the source: <code>~/.zshrc:4</code> commented out with an explanatory note and backup. When metered use later became <em>deliberate</em> (Claude concept generation), the key went into Cortex's own env files rather than back into the shell — the same policy, applied in both directions. The headless coding adapter runs its children through the same governance, so it cannot reintroduce the leak.</p>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p0">P0 · SAFETY</span><span class="title">02 — Every agent rooted at the home directory</span><span class="status s-done">Resolved</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Observed</div><div class="v"><p>Four persistent agent processes, each with the entire home folder in scope, combined with broad <code>fs</code>/<code>shell</code> grants and Grok in always-approve.</p></div></div>
+      <div class="row"><div class="k">Confirmed</div><div class="v"><p><code>resolveAgentCommand()</code> hardcoded <code>cwd = process.env.HOME</code> for every agent, in both the web and desktop spawn paths.</p></div></div>
+      <div class="row"><div class="k">Fixed</div><div class="v"><p>Workspace scope is a setting — active project, fixed directory, or home — defaulting to the most recent project workspace, falling back to home <em>with a visible warning</em>. The resolved directory shows as a chip in the terminal header, amber when home-scoped. The later code-generation work extended this: an agent writing files is confined to the project workspace by an assertion in the adapter itself, realpath-resolved so symlinks cannot escape it.</p></div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p0">P0 · SAFETY</span><span class="title">03 — Approval policy inherited, not governed</span><span class="status s-part">Where verifiable</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Observed</div><div class="v"><p>Claude Code in manual mode, Grok in always-approve. Nobody chose that asymmetry; it was each CLI's default.</p></div></div>
+      <div class="row"><div class="k">Fixed</div><div class="v">
+        <p>One fleet policy — inherit, read-only, ask, auto — translated into each CLI's own flags, passed <strong>only when the installed binary advertises both the flag and the value in its own <code>--help</code></strong>. That safeguard earned its place immediately: this build of Claude Code accepts <code>--permission-mode manual</code> but has no <code>default</code> value, so the intuitive mapping would have aborted every governed launch. A <code>read-only</code> policy also disables code generation outright rather than being quietly ignored.</p>
+      </div></div>
+      <div class="row"><div class="k">Limit</div><div class="v"><p>Enforced for Claude Code and Codex. Grok, Hermes and Antigravity expose no verifiable approval flag, so they report "CLI default" rather than pretending to be governed.</p></div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p1">P1 · CORRECTNESS</span><span class="title">04 — Config truth is split, and the display layer is already lying</span><span class="status s-part">Partial</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Observed</div><div class="v"><p>The roster showed <code>grok-4.5</code> while the running process was Grok 4.6.</p></div></div>
+      <div class="row"><div class="k">Fixed</div><div class="v"><p>A health endpoint probes <code>--version</code> live per CLI (cached five minutes); agent cards render it beside the configured model, which is dimmed and labelled as a preference rather than fact.</p></div></div>
+      <div class="row"><div class="k">Limit</div><div class="v"><p>Version is live; the <em>model</em> is still declared, not read. No CLI exposes its selected model programmatically, so the stale string is contradicted by live data rather than eliminated.</p></div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p1">P1 · TRUST</span><span class="title">05 — Real and simulated metrics are indistinguishable</span><span class="status s-done">Resolved</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Confirmed</div><div class="v"><p>Worse than described. The registry seeded fabricated metrics for all thirteen agents — Claude at 412,000 tokens, 97% success — rendering identically to real data.</p></div></div>
+      <div class="row"><div class="k">Fixed</div><div class="v">
+        <p>Metrics carry provenance of <em>seeded</em>, <em>simulated</em> or <em>measured</em>, which only ratchets upward so a later simulated run cannot relabel real data as fake. Unmeasured values carry a chip and dotted underline, or hide entirely behind a setting. Fleet success rate averages measured agents only.</p>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p1">P1 · COST</span><span class="title">06 — There is no routing policy, only a registry</span><span class="status s-done">Resolved</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Fixed</div><div class="v">
+        <p><strong>Nine task classes</strong> rather than pipeline phases, each with a stakes level that floors the required success rate. <strong>Cost is ordinal first</strong> — free-local &lt; included-in-plan &lt; metered; no hardcoded prices, real rates derive from local usage records. <strong>Only measured evidence promotes an agent</strong> — simulated runs are counted separately and never routed on. <strong>Budgets hard-stop metered spend</strong>; work degrades to local, and the project pauses with a reason if nothing free can run.</p>
+        <p>Live pipeline runs then hardened it: escalation after a failure originally walked the <em>cost</em> ladder — putting a coder-only local model on an architecture phase — and now walks a capability-filtered quality ladder instead (Part Three, 18).</p>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p1">P1 · UX</span><span class="title">07 — MCP denials are logged, not resolved</span><span class="status s-done">Resolved</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Fixed</div><div class="v"><p>Denials return a structured payload and surface as <em>Grant once / Grant always / Deny</em>, deduplicated per agent-server-tool. One-time grants live in memory with a ten-minute expiry, consumed on use — a one-time grant that survives a restart is not one.</p></div></div>
+      <div class="row"><div class="k">Not done</div><div class="v"><p>Routing prompts to Discord, as the review suggested.</p></div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p1">P1 · DATA</span><span class="title">08 — The vault index is stale and session capture is manual</span><span class="status s-part">Partial</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Fixed</div><div class="v"><p>The graph measures its own drift — notes on disk, notes indexed, notes modified since the build — and Graphify shows an explicit "index is behind" panel with a link to the always-current live layer.</p></div></div>
+      <div class="row"><div class="k">Not done</div><div class="v"><p>Automatic re-extraction on change, and automatic capture of agent sessions on exit. Staleness is surfaced, not eliminated.</p></div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p2">P2 · OPS</span><span class="title">09 — No fleet health view, and versions are drifting</span><span class="status s-part">Partial</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Fixed</div><div class="v"><p>A fleet health strip reads live from the machine: installed or not, binary path, reported version, auth mode, approval posture and workspace scope, with an amber banner counting metered and home-scoped agents. Nothing in it is seeded.</p></div></div>
+      <div class="row"><div class="k">Not done</div><div class="v"><p>"Update available" detection, which needs per-vendor release checks.</p></div></div>
+    </div>
+  </div>
+
+  <div class="f">
+    <div class="f-h"><span class="tag t-p2">P2 · HYGIENE</span><span class="title">10 — Smaller items worth a pass</span><span class="status s-part">3 of 5</span></div>
+    <div class="f-b">
+      <div class="row"><div class="k">Fixed</div><div class="v">
+        <p><strong>Two token meters, one label</strong> — renamed to "Tokens · tracked by Cortex" and "Provider credits · billed by provider". <strong>Port sprawl</strong> — the health probe reports the endpoint that actually answered, flagging when it differs from the configured one. <strong>"8 MCP servers" versus 7</strong> — the counter names its denominator and the SDK client card is badged "client · not a server".</p>
+      </div></div>
+      <div class="row"><div class="k">Not done</div><div class="v">
+        <p><strong>PII in the interface</strong> — printed by Antigravity's own terminal output; rewriting it would break the passthrough design. <strong>Jarvis·Research at 10,898ms</strong> — not investigated.</p>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ DISCOVERED ══ -->
+<section>
+  <h2 class="part">Part three</h2>
+  <h3 class="sec">Issues found in the product</h3>
+  <p class="sec-lede">Twenty-five defects the review could not have seen from screenshots. The ones that mattered most were found by running real projects — three successive live runs each exposed a layer the previous fix had been hiding.</p>
+  <div class="hr"></div>
+
+  <div class="callout warn">
+    <div class="lbl">The chain that blocked everything</div>
+    <p>
+      Five defects stacked, each hiding the next: <strong>no adapters</strong> (the expensive agents
+      were simulated) &rarr; <strong>no code generation</strong> (Implementation emitted a fixed
+      placeholder) &rarr; <strong>work discarded on timeout</strong> (25 minutes of written files
+      thrown away) &rarr; <strong>Testing reverted the app</strong> (overwrote it with the placeholder
+      and passed tests written against that placeholder) &rarr; <strong>orphaned servers</strong>
+      (a stale process serving the old build from memory, making a fixed app look broken and a broken
+      verification look sound). A green pipeline survived all five.
+    </p>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:8mm">#</th><th style="width:46mm">Issue</th><th>What was wrong, and what changed</th></tr></thead>
+    <tbody>
+      <tr><td class="num">01</td><td><strong>Ten of thirteen agents were simulated</strong></td>
+        <td>Only the three Jarvis agents had a live adapter. Built an LM Studio adapter for the six on-device models and a headless adapter for Claude Code and Codex, using invocations verified against the installed binaries. Both pin their model and backend — an agent whose outcomes train a router must not silently substitute.</td></tr>
+      <tr><td class="num">02</td><td><strong>Implementation never generated code</strong></td>
+        <td>A fixed template interpolating title, summary, features and stack — no feature code, no images, no icons, whatever was asked. A coding agent now implements the concept against the scaffold with write access confined to the project workspace, then verifies and repairs until it builds.</td></tr>
+      <tr><td class="num">03</td><td><strong>Testing reverted the app it was testing</strong></td>
+        <td>The deepest one. <code>generateAppTests(…, force: true)</code> — which Testing always passes — bypassed the "only repair a broken stub" guard, overwrote <code>app/page.tsx</code> and <code>layout.tsx</code> with the placeholder, generated unit tests asserting the placeholder's "Features"/"Stack" headings, passed them, and reported "Build &amp; real tests passed". A real implementation had no such headings, so even a flawless generation was reverted to make its own tests pass. Spotted because the reverted page carried an <em>older</em> footer string than the scaffold's — two divergent placeholder copies existed and Testing's won. Pinned by a test that fails with the exact page from the user's screenshot.</td></tr>
+      <tr><td class="num">04</td><td><strong>Fallback documents described Cortex</strong></td>
+        <td>The "architecture" for a portfolio homepage announced an Agent Registry, a Router and an Orchestrator — the template named Cortex's own modules regardless of project. Rewritten to derive strictly from the concept and open with a banner stating no agent produced them.</td></tr>
+      <tr><td class="num">05</td><td><strong>Escalation moved down, not up</strong></td>
+        <td>After Claude Code timed out on architecture, the retry went to a coder-only local model the capability filter says cannot do that class — the escalation path was the raw cost ladder, unfiltered and cheapest-first. Now capability-filtered and best-first: escalation is a quality decision, not a cost one.</td></tr>
+      <tr><td class="num">06</td><td><strong>Timing out discarded 25 minutes of finished work</strong></td>
+        <td>Generation writes files as it goes, but the timeout path restored the snapshot wholesale — ~35 files that may well have built, thrown away. It now verifies whatever was written and restores only if that cannot be repaired.</td></tr>
+      <tr><td class="num">07</td><td><strong>Timeouts sized for the wrong model</strong></td>
+        <td>Four minutes for an architecture document and twenty-five for generation — both exceeded by real runs on a reasoning model. Raised to 10 and 45 minutes. The same class recurred in the Claude concept-generation client: Grok's 90s bound would have timed out a measured 81s Opus run.</td></tr>
+      <tr><td class="num">08</td><td><strong>Budget hard stop bypassed</strong></td>
+        <td>The curated-specialist fallback selected from the raw agent pool rather than the budget-filtered one, so a fully spent cap still routed to a paid agent — in two branches. A safety filter applied in one branch is not applied.</td></tr>
+      <tr><td class="num">09</td><td><strong>Model ids never matched</strong></td>
+        <td>The registry stores <code>lmstudio-community/Qwen3-Coder-30B-…-MLX-4bit</code>; LM Studio serves <code>qwen/qwen3-coder-30b</code>. Neither is a substring of the other, so all five local agents would have failed and escalated to paid — making cost-aware routing worse than what it replaced. Replaced with token-subset matching on the bare name.</td></tr>
+      <tr><td class="num">10</td><td><strong>Apps classified by topic, not stack</strong></td>
+        <td>"Static Dark Changelog <em>for CLI Tools</em>" (stack: Eleventy, Tailwind, GitHub Pages) was scaffolded as a command-line application, because the classifier ran <code>includes("cli")</code> over the title — which also fires on "client", "clipboard", "click" and "declining". Keywords now match on word boundaries and a named web framework or host outranks any topic keyword.</td></tr>
+      <tr><td class="num">11</td><td><strong>Generated tests asserted text never promised</strong></td>
+        <td>The CLI suite required the concept title verbatim in help output; the implementation printed it lower-cased and three repair rounds tried to fix a mismatch that was never a defect. Same class as the web suite's placeholder assertions. Generated tests now describe behaviour the code is obliged to have, not strings it happens to emit.</td></tr>
+      <tr><td class="num">12</td><td><strong>A passing build ≠ a usable app</strong></td>
+        <td>The first generation run compiled cleanly while referencing 105 class names with no CSS rule behind any of them — unstyled navigation, raw blue links. Added a style-completeness check; "compiles but unstyled" now feeds the repair loop as a first-class failure.</td></tr>
+      <tr><td class="num">13</td><td><strong>Deleted projects left their dev servers running</strong></td>
+        <td><code>stopLaunchedApp</code> existed and was never called from anywhere; the server registry was module-scoped, so any reload orphaned running servers permanently. A detached server then kept serving the deleted app's bundle from memory on the same port — a page indistinguishable from "the pipeline built nothing", misread as a pipeline failure twice. Delete now stops the server; a cwd-verified reaper handles servers this process did not start.</td></tr>
+      <tr><td class="num">14</td><td><strong>Cortex's own instance orphans headless</strong></td>
+        <td>Next's standalone server rewrites <code>process.title</code> to "next-server", so the Electron main stops matching any <code>pkill -f Cortex.app</code> pattern. A partial kill leaves a headless main serving the old build — and because it still holds the single-instance lock, relaunching the app does nothing visible at all. Fixed with a pre-lock reap that distinguishes a stale orphan from a healthy instance <em>by inode</em>: after a reinstall the same path is a new directory. Live-tested through the full cycle: orphan reproduced, reaped on relaunch, healthy instance untouched, graceful quit leaves nothing.</td></tr>
+      <tr><td class="num">15</td><td><strong>Path containment failed under symlinks</strong></td>
+        <td>macOS resolves <code>/tmp</code> to <code>/private/tmp</code>, so a lexical comparison silently skipped — a false negative that reads as "nothing to clean up", in the check that gates both killing processes and granting write access. One realpath-resolving helper now serves both, with symlink-escape cases tested.</td></tr>
+      <tr><td class="num">16</td><td><strong>Claude has no <code>default</code> permission mode</strong></td>
+        <td>Accepted values are acceptEdits, auto, bypassPermissions, manual, dontAsk, plan. The obvious mapping would have aborted every launch; the help-probe caught it.</td></tr>
+      <tr><td class="num">17</td><td><strong>Hermes was priced as free</strong></td>
+        <td>Typed <code>local</code>, so the cost model treated it as free on-device inference — but it bills a prepaid Nous Portal balance. An explicit billing signal now overrides process location.</td></tr>
+      <tr><td class="num">18</td><td><strong>Lint reported 57,588 problems</strong></td>
+        <td>99.9% from a vendored server and three build-output trees, git-ignored but unknown to ESLint. Real findings were buried. Baseline is now 20 warnings, zero errors.</td></tr>
+      <tr><td class="num">19</td><td><strong>Fabricated token increment</strong></td>
+        <td>The scaffold step added 2,500 tokens to an agent's counter for an operation that spends none. Removed.</td></tr>
+      <tr><td class="num">20</td><td><strong>Metrics double-counted</strong></td>
+        <td>Total tokens were agent counters plus half the usage records, annotated "rough"; latency and success averaged seeded placeholders. Rewritten to report by provenance.</td></tr>
+      <tr><td class="num">21</td><td><strong>Cost used an invented rate</strong></td>
+        <td>Spend recorded as flat <code>tokens × 0.000002</code> for every agent. Now priced against the agent's actual tier; simulated runs are no longer mislabelled as free-local inference.</td></tr>
+      <tr><td class="num">22</td><td><strong>Stale-render bug in the terminal</strong></td>
+        <td>The "Save to Second Brain" button read a ref during render; ref writes do not re-render. Worked only because an unrelated state update happened to follow. Now driven by state.</td></tr>
+      <tr><td class="num">23</td><td><strong>React Compiler deoptimisation</strong></td>
+        <td>A hook declared per-field dependencies while its body read the whole object, so the compiler skipped optimising it. Destructuring reconciles the two.</td></tr>
+      <tr><td class="num">24</td><td><strong>LM Studio was not serving</strong></td>
+        <td>The application was running but its server was not listening, and the process ignored SIGTERM — which is why quitting appeared to do nothing. Enabled autostart; a cold start brings the server up in ~4s.</td></tr>
+      <tr><td class="num">25</td><td><strong>Concept generation had one live provider</strong></td>
+        <td>Grok or canned templates, nothing between. Claude added as a second provider (structured outputs on claude-opus-5 — schema-constrained, no JSON scraping), with a shared prompt brief and every fallback carrying its accumulated reasons. Verified live both ways: 10 concepts in 81s with Grok unset; honest degradation to local with both keys unset.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══ PROCESS ══ -->
+<section>
+  <h2 class="part">Part four</h2>
+  <h3 class="sec">Failures in this work</h3>
+  <p class="sec-lede">Seven mistakes made while fixing the above. Each produced a wrong conclusion that was stated confidently before being caught — most by testing against reality, two only because the user pushed back.</p>
+  <div class="hr"></div>
+
+  <div class="callout self">
+    <div class="lbl">Pattern</div>
+    <p>
+      Five of the seven are one error: <strong>a check contaminated by the thing it was
+      checking.</strong> Fixtures invented rather than read from the live system; a process watcher
+      matching its own command line; a shell inheriting the variable it was testing for; a port that
+      answered standing in for the build behind it; a tool timeout read as task completion. Each
+      looked like evidence and was not.
+    </p>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:46mm">Mistake</th><th>Consequence, and what was done</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Test fixtures authored from imagination</strong></td>
+        <td>The model matcher passed nine hand-written cases and failed all five real model ids. Shipping it would have made every local agent fail and escalate to a paid one. Fixtures are now captured verbatim from the live backends and committed under <code>tests/fixtures/</code>.</td></tr>
+      <tr><td><strong>Tests written to a temp directory</strong></td>
+        <td>"55 checks passing" was cited as verification for work with no durable tests; days later the harnesses had been cleaned up and nothing could be re-run. They now live in the repo behind <code>npm test</code> — and immediately caught an unrepresentative routing fixture. The report's own source made the same mistake and got the same fix.</td></tr>
+      <tr><td><strong>Checks run inside the environment under test</strong></td>
+        <td>A <code>pgrep</code> watcher matched its own command line and reported its target alive indefinitely; a login shell spawned to verify an environment variable was gone inherited it from the parent and reported failure. Both stated as fact before correction; both needed isolation.</td></tr>
+      <tr><td><strong>Verified an install against an orphaned old server</strong></td>
+        <td>After replacing the app, the settings endpoint answered with plausible values — from a headless process still serving the previous build out of memory. "Installed and verified" was reported twice on that basis. A port that responds is not the build behind it; process start time is now checked against install time before any conclusion.</td></tr>
+      <tr><td><strong>Diagnosed a mechanism the evidence later contradicted</strong></td>
+        <td>The orphaned-server fix was committed with a "Next forks a worker" explanation. Live inspection showed no fork: the Electron main itself is retitled "next-server". The wrong model produced a quit handler that could never fire usefully; comments and handler were corrected, and the live test then found two further races in the corrected fix (a killed orphan's lock socket briefly accepting connections; a dying pid misread as a foreign process).</td></tr>
+      <tr><td><strong>A tool timeout read as completion</strong></td>
+        <td>A 10-minute shell limit killed a codegen trial mid-run; because the build passed afterwards, "took over ten minutes" was reported as if the run had finished. The real measurement — a 25-minute live run — arrived later and contradicted the sizing built on the misreading.</td></tr>
+      <tr><td><strong>A silent no-op driven as if it worked</strong></td>
+        <td>Pipeline approvals were scripted without the required <code>taskId</code>; the API returns 200 with the unchanged project, so the script polled a gate for over an hour believing it was clearing it. (The API's behaviour — accepting an approve that approves nothing — is listed as an open item below.)</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The first two were caught by testing against reality — a live backend, a real pipeline run. The
+    orphaned-server family was caught because the user twice refused to accept "it works" when the
+    screen said otherwise. That pushback was correct both times.
+  </p>
+</section>
+
+<!-- ══ VERIFICATION ══ -->
+<section>
+  <h2 class="part">Part five</h2>
+  <h3 class="sec">Verification and what remains</h3>
+  <p class="sec-lede">What was tested, how, and the work deliberately left open.</p>
+  <div class="hr"></div>
+
+  <table>
+    <thead><tr><th style="width:54mm">Check</th><th style="width:22mm">Result</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>End-to-end product builds</td><td class="num">2 / 2</td><td>Ember &amp; Grind (55 files, all six requested features, screenshots verified) and OpenTheory forum (84 files, dynamic routes, own e2e suite) — six green phases each, Testing passing against the real app</td></tr>
+      <tr><td>Automated checks (<code>npm test</code>)</td><td class="num">102 / 102</td><td>Routing &amp; cost model (with the live escalation regression as a named case), model matcher &amp; CLI parsing against verbatim captures, style completeness, pipeline survival (Testing cannot revert a real app), path containment incl. symlink escapes, app-kind classification incl. the live misclassification</td></tr>
+      <tr><td>Orphaned-instance recovery</td><td class="num">4 / 4</td><td>Live on the packaged app: orphan reproduced by partial kill; reaped on relaunch with the new instance serving (HTTP 200); healthy instance left untouched by a second launch; graceful quit releases everything. Two races in the fix itself were found and fixed by this test</td></tr>
+      <tr><td>Claude concept generation</td><td>verified live</td><td>10 schema-constrained concepts via claude-opus-5 in 81s with Grok unset; both-keys-unset degrades to local with reasons reported</td></tr>
+      <tr><td>TypeScript / ESLint / build</td><td>clean</td><td>0 errors (lint was 57,588 problems), production build compiles</td></tr>
+      <tr><td>LM Studio autostart</td><td>verified</td><td>Hard kill, cold launch, server self-started in ~4s</td></tr>
+      <tr><td>Bundle provenance</td><td>routine</td><td>New-code markers checked in the packaged asar/bundle before every install; serving process start time checked against install time after every launch</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Deliberately not done</h4>
+  <ul>
+    <li><strong>PII masking</strong> — belongs to Antigravity's own output, not Cortex's to rewrite.</li>
+    <li><strong>Jarvis·Research latency</strong> — the 10,898ms outlier was not investigated.</li>
+    <li><strong>Vault auto-reindex and automatic session capture</strong> — staleness is surfaced; automation is not built.</li>
+    <li><strong>Update-available detection</strong> — needs per-vendor release checks.</li>
+    <li><strong>Twenty <code>set-state-in-effect</code> warnings</strong> — the fetch-on-mount pattern across every data panel; replacing it is a migration, not a cleanup. Kept visible as tracked debt.</li>
+  </ul>
+
+  <h4>Open, and worth closing</h4>
+  <ul>
+    <li><strong>Approve without a <code>taskId</code> is a silent no-op.</strong> The action API returns 200 with the unchanged project. It should either error or approve the currently gated task. Cost one scripted run over an hour; a UI client never hits it, which is why it survived.</li>
+    <li><strong>Implementation looks stalled while it works.</strong> The progress bar parks at 95% for the whole generation (15–30 minutes observed). It was reasonably read as a hang. Needs an elapsed-time indicator and expectation-setting copy.</li>
+    <li><strong>Repair-loop convergence is thinly measured.</strong> Two products shipped clean; one run burned three repair rounds on a test assertion that was itself the defect. How reliably repair converges across concept types is not yet known.</li>
+    <li><strong>LM Studio config persistence proven only against a hard kill</strong> — a graceful quit rewriting the autostart flag remains unproven, though evidence suggests it will not.</li>
+  </ul>
+
+  <div class="callout" style="margin-top:6mm">
+    <div class="lbl">Five lessons worth keeping</div>
+    <p><strong>Verify, don't guess, when shelling out to someone else's CLI.</strong> A wrong flag turns "not governed" into "will not start".</p>
+    <p><strong>Never author test fixtures for an external system's output.</strong> Nine invented cases passed while all five real ones failed.</p>
+    <p><strong>A test run inside the environment it tests will lie.</strong> Isolate it, or it reports on itself.</p>
+    <p><strong>A green pipeline is not a working product.</strong> Six phases passed while Testing was overwriting the app with a placeholder and grading itself against it. The only check that found it was running the thing and reading the result.</p>
+    <p><strong>A port that answers is not the build behind it.</strong> Twice, a replaced app was "verified" against a headless orphan serving the old code from memory. Identity checks (process start time, directory inode) are part of verification, not paranoia.</p>
+  </div>
+
+  <div class="foot">
+    Prepared with full source access, a live machine and repeated real pipeline runs, in response to a
+    review conducted from 24 screenshots without any of them. Branch <span class="mono">review-findings-0.2.12</span>,
+    twelve commits, pushed; PR #1 open against main. Findings state what was verified; limits and
+    unfinished work are named as such. Source for this document:
+    <span class="mono">docs/review-response/report.html</span>.
+  </div>
+</section>
+
+</body>
+</html>

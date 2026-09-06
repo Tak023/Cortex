@@ -366,14 +366,6 @@ function formatStars(n: number): string {
   return String(n);
 }
 
-/** Map star count → priority so mega-repos surface under GitHub / All. */
-function starsToPriority(stars: number): number {
-  // log scale: 100★≈55, 1k★≈70, 10k★≈85, 50k★≈95, 100k★≈100
-  if (stars <= 0) return 40;
-  const p = 40 + Math.log10(stars + 1) * 18;
-  return Math.min(110, Math.round(p));
-}
-
 type GhRepo = {
   id: number;
   full_name: string;

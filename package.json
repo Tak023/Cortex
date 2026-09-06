@@ -16,9 +16,11 @@
     "desktop:dev": "concurrently -k -n next,electron -c cyan,magenta \"next dev -H 127.0.0.1 -p 3000\" \"wait-on http://127.0.0.1:3000 && electron .\"",
     "desktop:build": "npm run build && node scripts/prepare-standalone.cjs && electron-builder --mac",
     "desktop:pack": "npm run desktop:build",
-    "jarvis:proxy": "node scripts/jarvis-chat-proxy.mjs"
+    "jarvis:proxy": "node scripts/jarvis-chat-proxy.mjs",
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@huggingface/transformers": "^4.2.0",
     "@lancedb/lancedb": "^0.37.1",
     "@modelcontextprotocol/sdk": "^1.30.0",

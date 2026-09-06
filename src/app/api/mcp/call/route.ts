@@ -34,9 +34,23 @@ export async function POST(req: Request) {
     return NextResponse.json(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const denied = /not allowed|denied|allow list/i.test(msg);
+    // A permission failure is a decision the operator can make, so return the
+    // subject of the decision rather than only an error string.
+    const info = (e as { denied?: Record<string, unknown> }).denied;
+    const denied = Boolean(info) || /not allowed|denied|allow list/i.test(msg);
     return NextResponse.json(
-      { error: msg },
+      {
+        error: msg,
+        ...(denied
+          ? {
+              denied: info ?? { agentId, serverId, tool },
+              resolve: {
+                endpoint: "/api/mcp/grants",
+                scopes: ["once", "always"],
+              },
+            }
+          : {}),
+      },
       { status: denied ? 403 : 502 },
     );
   }

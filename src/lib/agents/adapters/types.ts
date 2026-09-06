@@ -68,6 +68,13 @@ export interface AgentHealth {
   detail: string;
   models?: string[];
   latencyMs?: number;
+  /**
+   * The endpoint that actually answered, which may not be the one configured:
+   * the chat path tries LM Studio, the configured URL, Ollama and `jarvis
+   * serve` in order. Reporting only the configured URL made three different
+   * ports appear across the UI with no way to tell which one was live.
+   */
+  endpoint?: string;
 }
 
 export interface AgentAdapter {

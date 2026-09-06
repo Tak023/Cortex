@@ -276,6 +276,10 @@ function registerIpc() {
           cols: Number(opts.cols) || 120,
           rows: Number(opts.rows) || 36,
           cwd: opts.cwd ? String(opts.cwd) : undefined,
+          // Fleet governance resolved by the Cortex server; re-validated in
+          // pty-host before it reaches a spawn.
+          extraArgs: Array.isArray(opts.extraArgs) ? opts.extraArgs : [],
+          unsetEnv: Array.isArray(opts.unsetEnv) ? opts.unsetEnv : [],
         },
         emit,
       );
@@ -370,6 +374,197 @@ function waitForUrl(url, { timeoutMs = 90000, intervalMs = 300 } = {}) {
   });
 }
 
+/**
+ * Reap orphaned Cortex servers holding our port.
+ *
+ * The server genuinely runs in-process — but Next's standalone server.js
+ * rewrites `process.title` to "next-server (vX)", so the Electron main stops
+ * matching any `pkill -f Cortex.app` style pattern. A partial kill (or a
+ * crash of the helper processes) then leaves a HEADLESS main: window gone,
+ * server still serving the old build from memory even after the bundle on
+ * disk is replaced. Because that headless main also still holds the
+ * single-instance lock, a relaunch quits itself, the orphan's
+ * second-instance handler has no window to focus, and the user sees nothing
+ * happen at all. Observed twice in the wild before diagnosis.
+ *
+ * `waitForUrl` resolving on any 200 makes it worse: startup can "succeed"
+ * against the orphan and load the previous build.
+ *
+ * Safety: kill only listeners whose working directory is a Cortex
+ * standalone location. Paths are realpath-resolved before comparison — on
+ * macOS /tmp vs /private/tmp style symlinks make lexical comparison
+ * silently skip (a false negative that reads as "nothing to clean up").
+ */
+function listenerPidsOnPort(port) {
+  if (process.platform === "win32") return [];
+  try {
+    const { execFileSync } = require("child_process");
+    return execFileSync("lsof", ["-nP", `-tiTCP:${port}`, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return []; // nothing listening
+  }
+}
+
+function cwdOfPid(pid) {
+  try {
+    const { execFileSync } = require("child_process");
+    const out = execFileSync("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], {
+      encoding: "utf8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const line = out.split("\n").find((l) => l.startsWith("n"));
+    return line ? line.slice(1) : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Inode of a pid's working directory (0 when unknown). */
+function cwdInodeOfPid(pid) {
+  try {
+    const { execFileSync } = require("child_process");
+    const out = execFileSync(
+      "lsof",
+      ["-a", "-p", String(pid), "-d", "cwd", "-Fin"],
+      { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const line = out.split("\n").find((l) => l.startsWith("i"));
+    return line ? Number(line.slice(1)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Pre-lock reap: kill a STALE Cortex instance holding our port, and only a
+ * stale one. Must run before requestSingleInstanceLock — the orphan holds
+ * the lock, so once the lock is requested this process has already lost.
+ *
+ * Stale vs healthy is decided by inode, not path: after a reinstall the
+ * standalone directory exists at the same path but is a new directory, so a
+ * healthy instance's cwd inode matches ours and a replaced-out-from-under
+ * orphan's does not. A healthy running instance is left alone for the
+ * normal lock/focus path.
+ */
+function reapStaleInstancePreLock(port) {
+  const killed = [];
+  try {
+    const standaloneDir = findStandaloneDir();
+    if (!standaloneDir) return;
+    const ourInode = fs.statSync(standaloneDir).ino;
+    for (const pid of listenerPidsOnPort(port)) {
+      if (Number(pid) === process.pid) continue;
+      if (!isCortexServerCwd(cwdOfPid(pid))) continue;
+      const theirs = cwdInodeOfPid(pid);
+      if (theirs && theirs === ourInode) continue; // healthy current build
+      try {
+        process.kill(Number(pid), "SIGKILL");
+        killed.push(Number(pid));
+        console.log(
+          `[cortex] reaped stale instance pid ${pid} (old build) on :${port}`,
+        );
+      } catch {
+        /* already gone */
+      }
+    }
+
+    // requestSingleInstanceLock follows immediately, and a SIGKILLed orphan's
+    // lock socket keeps accepting connections for a few milliseconds — long
+    // enough for the new instance to be told the lock is taken and quit
+    // itself silently. Observed live: log showed only the reap line, then
+    // nothing. Wait for the corpses to actually be gone.
+    const deadline = Date.now() + 3000;
+    const sleepSync = (ms) =>
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    while (killed.length && Date.now() < deadline) {
+      const alive = killed.filter((pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (!alive.length) break;
+      sleepSync(100);
+    }
+    if (killed.length) sleepSync(150); // socket teardown cushion
+  } catch {
+    /* reaping is best-effort; the in-startup reap is the second net */
+  }
+}
+
+function realpathSafe(p) {
+  if (!p) return "";
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+function isCortexServerCwd(cwd) {
+  const real = realpathSafe(cwd);
+  if (!real) return false;
+  // Any packaged Cortex install (this one or a replaced/renamed copy)
+  if (/\/Cortex\.app\/Contents\/Resources\/standalone(\/|$)/.test(real)) {
+    return true;
+  }
+  // Dev / staging layouts for THIS checkout only
+  const appPath = realpathSafe(app.getAppPath());
+  for (const dir of [
+    path.join(appPath, "desktop-runtime"),
+    path.join(appPath, ".next", "standalone"),
+    path.join(appPath, "standalone"),
+  ]) {
+    const cand = realpathSafe(dir);
+    if (real === cand || real.startsWith(cand + path.sep)) return true;
+  }
+  return false;
+}
+
+/**
+ * Kill Cortex-owned listeners on `port`. Returns the pids killed.
+ * A foreign process on the port is left alone — the caller decides
+ * whether that is fatal.
+ */
+function reapCortexServers(port, { includeOwnChildren = false } = {}) {
+  const killed = [];
+  for (const pid of listenerPidsOnPort(port)) {
+    if (Number(pid) === process.pid) continue;
+    let ours = isCortexServerCwd(cwdOfPid(pid));
+    if (!ours && includeOwnChildren) {
+      try {
+        const { execFileSync } = require("child_process");
+        const ppid = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+          encoding: "utf8",
+          timeout: 2000,
+        }).trim();
+        ours = Number(ppid) === process.pid;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!ours) continue;
+    try {
+      process.kill(Number(pid), "SIGKILL");
+      killed.push(pid);
+      console.log(`[cortex] reaped stale server pid ${pid} on :${port}`);
+    } catch {
+      /* already gone */
+    }
+  }
+  return killed;
+}
+
 function findStandaloneDir() {
   const appPath = app.getAppPath();
   const resources = process.resourcesPath;
@@ -425,6 +620,29 @@ async function startProductionServer() {
   loadCortexEnv();
   loadEnvFile(path.join(standaloneDir, ".env"));
   loadEnvFile(path.join(standaloneDir, ".env.local"));
+
+  // An orphaned previous instance on this port makes startup a lie:
+  // waitForUrl resolves against the orphan and the window loads the OLD
+  // build. Reap ours, then wait for the port to actually clear — a freshly
+  // killed pid can linger in lsof for a beat with an unreadable cwd, and
+  // treating that corpse as "foreign" aborted startup in live testing.
+  reapCortexServers(PROD_PORT);
+  const settleUntil = Date.now() + 5000;
+  for (;;) {
+    const holders = listenerPidsOnPort(PROD_PORT);
+    if (!holders.length) break; // port is ours to take
+    if (Date.now() > settleUntil) {
+      // Persistent and identifiable as someone else's process: refuse to
+      // silently serve it. (A cortex-cwd holder here means a reap failed —
+      // still refuse rather than lie.)
+      throw new Error(
+        `Port ${PROD_PORT} is held by another process (pid ${holders.join(", ")}). ` +
+          `Free it or set CORTEX_PORT to a different port.`,
+      );
+    }
+    reapCortexServers(PROD_PORT); // in case a holder became identifiable
+    await new Promise((r) => setTimeout(r, 250));
+  }
 
   // server.js calls startServer() and begins listening
   require(path.join(standaloneDir, "server.js"));
@@ -573,6 +791,8 @@ async function createWindow(serverUrl) {
 }
 
 // Single instance for packaged app only (dev uses separate userData + allows restarts)
+// A stale orphan holds this lock too — reap it first or relaunch is a silent no-op.
+if (!isDev) reapStaleInstancePreLock(PROD_PORT);
 const gotLock = isDev ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -704,6 +924,7 @@ app.on("before-quit", () => {
     /* ignore */
   }
 });
+
 
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-navigate", (event, url) => {

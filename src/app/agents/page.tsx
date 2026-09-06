@@ -4,12 +4,36 @@ import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { AgentCard } from "@/components/agents/AgentCard";
+import { FleetHealthStrip } from "@/components/agents/FleetHealthStrip";
 import { ActivityFeed } from "@/components/orchestration/ActivityFeed";
-import { useActivity, useAgents } from "@/lib/hooks";
+import {
+  useActivity,
+  useAgents,
+  useFleetHealth,
+  useSettings,
+} from "@/lib/hooks";
 import type { AgentType } from "@/lib/types";
+
+/** Registry ids for the five passthrough CLIs, mapped to their health rows. */
+const HEALTH_ID_BY_AGENT: Record<string, string> = {
+  "agent-hermes": "hermes",
+  "agent-claude-code": "claude-code",
+  "agent-codex": "codex",
+  "agent-grok": "grok",
+  "agent-antigravity": "antigravity",
+};
 
 export default function AgentsPage() {
   const { agents, loading, action, refresh } = useAgents(5000);
+  const { settings } = useSettings();
+  const health = useFleetHealth();
+  const showSeeded = settings?.showSeededMetrics ?? true;
+
+  const liveVersionFor = (agentId: string): string | null => {
+    const healthId = HEALTH_ID_BY_AGENT[agentId];
+    if (!healthId) return null;
+    return health.rows.find((r) => r.id === healthId)?.version ?? null;
+  };
   const activity = useActivity(25, 5000);
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | AgentType>("all");
@@ -67,6 +91,14 @@ export default function AgentsPage() {
         description="Installed agents with status, capabilities, and quick controls"
       />
       <div className="flex-1 overflow-y-auto p-6">
+        <div className="mb-5">
+          <FleetHealthStrip
+            rows={health.rows}
+            loading={health.loading}
+            error={health.error}
+            onRefresh={() => void health.refresh()}
+          />
+        </div>
         {jarvisNote && (
           <div className="mb-4 rounded-xl border border-border bg-panel-elevated/60 px-4 py-2.5 text-xs text-muted">
             <span className="font-medium text-foreground/85">OpenJarvis · </span>
@@ -121,7 +153,13 @@ export default function AgentsPage() {
                 </h2>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {local.map((a) => (
-                    <AgentCard key={a.id} agent={a} onAction={action} />
+                    <AgentCard
+                      key={a.id}
+                      agent={a}
+                      onAction={action}
+                      showSeededMetrics={showSeeded}
+                      liveVersion={liveVersionFor(a.id)}
+                    />
                   ))}
                 </div>
               </section>
@@ -133,7 +171,13 @@ export default function AgentsPage() {
                 </h2>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {cloud.map((a) => (
-                    <AgentCard key={a.id} agent={a} onAction={action} />
+                    <AgentCard
+                      key={a.id}
+                      agent={a}
+                      onAction={action}
+                      showSeededMetrics={showSeeded}
+                      liveVersion={liveVersionFor(a.id)}
+                    />
                   ))}
                 </div>
               </section>

@@ -7,6 +7,7 @@ import type {
   Task,
 } from "../types";
 import { phaseAgentRationale, routeAgent } from "../agents/router";
+import { routeTask } from "./routing";
 
 export const PIPELINE_PHASES: PipelinePhase[] = [
   "research",
@@ -42,14 +43,18 @@ const PHASE_META: Record<
   implementation: {
     title: "Implementation",
     description:
-      "Cortex scaffolds a real app and runs install + build smoke (agent label is ownership only).",
+      "Cortex scaffolds the app skeleton, then a coding agent implements the concept's " +
+      "features into it with write access confined to the project workspace, verifying and " +
+      "repairing until the build passes. Falls back to the scaffold alone — and says so — " +
+      "when no write-capable agent is available or the approval policy forbids it.",
     requiresApproval: false,
     minutes: 25,
   },
   testing: {
-    title: "Testing",
+    title: "Testing (scaffold smoke)",
     description:
-      "Cortex runs install → build → Vitest (Playwright when available). Agent label is ownership only.",
+      "Cortex runs install → build → Vitest (Playwright when available) against the scaffold. " +
+      "These are smoke tests for the generated starter, not coverage of the concept's features.",
     requiresApproval: false,
     minutes: 18,
   },
@@ -74,13 +79,20 @@ export function buildPipelineTasks(
   for (let i = 0; i < PIPELINE_PHASES.length; i++) {
     const phase = PIPELINE_PHASES[i];
     const meta = PHASE_META[phase];
-    // Always pick the best agent for this phase.
-    // Implementation/testing/architecture must NOT soft-swap away from the #1 specialist
-    // (e.g. Claude Code → Codex) — those stages own the real build/test path and labels
-    // must match the intended owner. Soft diversity only for research/planning/polish.
-    let agent = routeAgent(agents, phase);
+
+    // The routing policy decides the initial owner. Under quality-first this
+    // is exactly the old curated pick; under the cost-aware policies it is the
+    // cheapest agent that has proven itself on this task class.
+    const decision = routeTask({ phase, projectId, agents });
+    let agent = agents.find((a) => a.id === decision.agentId) ?? null;
+    let routingReason = decision.reason;
+
+    // Soft diversity is a quality-first nicety — under a cost-aware policy the
+    // cheapest proven agent should win every phase it qualifies for, and
+    // shuffling to a pricier one to "vary" the roster defeats the point.
     const allowSoftDiversity =
-      phase === "research" || phase === "planning" || phase === "polish";
+      decision.policy === "quality-first" &&
+      (phase === "research" || phase === "planning" || phase === "polish");
     if (
       allowSoftDiversity &&
       agent &&
@@ -93,6 +105,7 @@ export function buildPipelineTasks(
         (alt.strengths[phase] ?? 0) >= (agent.strengths[phase] ?? 0) - 8
       ) {
         agent = alt;
+        routingReason = `${decision.reason} Soft-diversified off ${prevAgentId}.`;
       }
     }
     if (agent) prevAgentId = agent.id;
@@ -118,6 +131,8 @@ export function buildPipelineTasks(
       retryCount: 0,
       maxRetries: phase === "implementation" || phase === "testing" ? 3 : 2,
       lastError: null,
+      failedAgentIds: [],
+      routingReason,
     });
     prevId = id;
   }

@@ -8,6 +8,7 @@ import path from "path";
 import { nanoid } from "nanoid";
 import type { ExternalAgentId } from "./externalAgents";
 import { resolveAgentCommand } from "./resolveAgentCommand";
+import type { AgentLaunchPlan } from "./governance";
 import {
   appendVaultDailyNote,
   appendVaultLog,
@@ -23,6 +24,8 @@ export type TerminalSessionInfo = {
   createdAt: string;
   exited: boolean;
   exitCode: number | null;
+  /** Auth mode, approval posture and workspace scope this process launched with. */
+  governance?: AgentLaunchPlan;
 };
 
 type PtyHandle = {
@@ -55,7 +58,7 @@ function store(): GlobalStore {
   return g.__cortexTerminalSessions;
 }
 
-function buildEnv(): NodeJS.ProcessEnv {
+function buildEnv(unsetEnv: string[] = []): NodeJS.ProcessEnv {
   const home = process.env.HOME || os.homedir();
   const extra = [
     path.join(home, ".local/bin"),
@@ -89,6 +92,11 @@ function buildEnv(): NodeJS.ProcessEnv {
     "CLAUDE_CODE_NO_COLOR",
     "NODE_ENV",
   ]) {
+    delete env[key];
+  }
+  // Fleet auth policy: e.g. drop ANTHROPIC_API_KEY so a claude.ai plan wins
+  // instead of silently metering every token against prepaid credits.
+  for (const key of unsetEnv) {
     delete env[key];
   }
   return env;
@@ -156,7 +164,7 @@ function loadNodePty(): typeof import("node-pty") {
 function spawnPty(
   command: string,
   args: string[],
-  opts: { cwd: string; cols: number; rows: number },
+  opts: { cwd: string; cols: number; rows: number; unsetEnv?: string[] },
 ): PtyHandle {
   const pty = loadNodePty();
   const proc = pty.spawn(command, args, {
@@ -164,7 +172,7 @@ function spawnPty(
     cols: Math.max(20, opts.cols || 120),
     rows: Math.max(10, opts.rows || 36),
     cwd: opts.cwd,
-    env: buildEnv() as Record<string, string>,
+    env: buildEnv(opts.unsetEnv) as Record<string, string>,
   });
   return {
     write: (data: string) => proc.write(data),
@@ -198,19 +206,20 @@ export function createTerminalSession(opts: {
   rows?: number;
   cwd?: string;
 }): { ok: true; session: TerminalSessionInfo } | { ok: false; detail: string } {
-  const resolved = resolveAgentCommand(opts.agent);
+  const resolved = resolveAgentCommand(opts.agent, { cwd: opts.cwd });
   if (!resolved.ok || !resolved.command) {
     return { ok: false, detail: resolved.detail };
   }
 
   const id = nanoid(12);
-  const cwd = opts.cwd || resolved.cwd;
+  const cwd = resolved.cwd;
   let pty: PtyHandle;
   try {
     pty = spawnPty(resolved.command, resolved.args, {
       cwd,
       cols: opts.cols ?? 120,
       rows: opts.rows ?? 36,
+      unsetEnv: resolved.governance?.unsetEnv,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -234,6 +243,7 @@ export function createTerminalSession(opts: {
     createdAt: new Date().toISOString(),
     exited: false,
     exitCode: null,
+    governance: resolved.governance,
     pty,
     bus,
     backlog,
@@ -268,10 +278,14 @@ export function createTerminalSession(opts: {
   store().sessions.set(id, session);
 
   try {
+    const gov = resolved.governance;
     appendVaultLog(
       session.label,
       "Terminal session started",
-      `In-app terminal opened in \`${session.cwd}\``,
+      `In-app terminal opened in \`${session.cwd}\`` +
+        (gov
+          ? ` · auth: ${gov.auth.label} · approval: ${gov.approval.applied}`
+          : ""),
     );
   } catch {
     /* non-blocking */
@@ -288,6 +302,7 @@ export function createTerminalSession(opts: {
       createdAt: session.createdAt,
       exited: session.exited,
       exitCode: session.exitCode,
+      governance: session.governance,
     },
   };
 }

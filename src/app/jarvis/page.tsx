@@ -78,9 +78,17 @@ export default function JarvisPage() {
   ]);
   const [micError, setMicError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // These two are not plain latest-value mirrors: `busyRef` is also written
+  // imperatively as a re-entrancy lock while a turn is in flight (see the
+  // send handler), and the render-time assignment intentionally resets it
+  // from state. Moving the sync into an effect would change that ordering.
+  // Untangling the mirror from the lock is a real refactor of the chat turn
+  // loop, so it is deliberately left as-is rather than half-changed here.
   const messagesRef = useRef(messages);
+  // eslint-disable-next-line react-hooks/refs -- mirror doubles as an imperative lock; see above
   messagesRef.current = messages;
   const busyRef = useRef(busy);
+  // eslint-disable-next-line react-hooks/refs -- see above
   busyRef.current = busy;
   const greetedRef = useRef(false);
 

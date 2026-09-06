@@ -69,6 +69,21 @@ export interface VaultGraph {
     /** Share of edges that are EXTRACTED rather than INFERRED. */
     extractedRatio: number;
   };
+  /**
+   * How far the built index has drifted from the vault on disk. Present only
+   * for the graphify layer — the live layer is, by construction, current.
+   */
+  freshness?: {
+    stale: boolean;
+    /** Notes in the vault right now. */
+    vaultNoteCount: number;
+    /** Notes represented in the built graph. */
+    indexedNoteCount: number;
+    /** Notes modified or created after the graph was built. */
+    changedSinceBuild: number;
+    /** Newest note mtime in the vault. */
+    newestNoteAt: string | null;
+  };
   /** Set when graphify output is missing or unreadable, so the UI can say why. */
   notice?: string;
 }
@@ -90,6 +105,45 @@ export function hasGraphifyGraph(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Compare the built index against the vault on disk.
+ *
+ * A semantic graph is a point-in-time snapshot, so "89 nodes, 11 notes" can
+ * quietly describe a vault that now holds 15. Rather than making the operator
+ * notice that by cross-referencing two screens, the graph reports its own drift.
+ */
+function graphFreshness(
+  builtAt: string | null,
+  indexedNoteCount: number,
+): VaultGraph["freshness"] {
+  const builtMs = builtAt ? new Date(builtAt).getTime() : 0;
+  let vaultNoteCount = 0;
+  let changedSinceBuild = 0;
+  let newestMs = 0;
+
+  for (const abs of listGraphNotes(getVaultDir())) {
+    vaultNoteCount += 1;
+    let mtimeMs = 0;
+    try {
+      mtimeMs = fs.statSync(abs).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (mtimeMs > newestMs) newestMs = mtimeMs;
+    if (builtMs && mtimeMs > builtMs) changedSinceBuild += 1;
+  }
+
+  return {
+    stale:
+      changedSinceBuild > 0 ||
+      (vaultNoteCount > 0 && indexedNoteCount < vaultNoteCount),
+    vaultNoteCount,
+    indexedNoteCount,
+    changedSinceBuild,
+    newestNoteAt: newestMs ? new Date(newestMs).toISOString() : null,
+  };
 }
 
 // ── graphify layer ──────────────────────────────────────────────────────────
@@ -177,18 +231,20 @@ function readGraphifyGraph(): VaultGraph | null {
     });
   }
 
-  return finalize({
+  const graph = finalize({
     source: "graphify",
     nodes: [...nodes.values()],
     edges,
     hyperedges,
     builtAt,
   });
+  graph.freshness = graphFreshness(builtAt, graph.stats.noteCount);
+  return graph;
 }
 
 // ── wikilink layer (live, no build step) ────────────────────────────────────
 
-function listNotes(dir: string, depth = 0, out: string[] = []): string[] {
+function listGraphNotes(dir: string, depth = 0, out: string[] = []): string[] {
   if (depth > MAX_DEPTH || out.length >= MAX_NOTES) return out;
   let entries: fs.Dirent[];
   try {
@@ -200,7 +256,7 @@ function listNotes(dir: string, depth = 0, out: string[] = []): string[] {
     // Skips dotfiles (.obsidian, .git) and graphify's own output directory.
     if (!isIndexedVaultEntry(e.name)) continue;
     const abs = path.join(dir, e.name);
-    if (e.isDirectory()) listNotes(abs, depth + 1, out);
+    if (e.isDirectory()) listGraphNotes(abs, depth + 1, out);
     else if (e.isFile() && e.name.endsWith(".md")) {
       out.push(abs);
       if (out.length >= MAX_NOTES) return out;
@@ -222,7 +278,7 @@ function folderCommunity(rel: string): string {
 
 function buildWikilinkGraph(): VaultGraph {
   const dir = getVaultDir();
-  const files = listNotes(dir);
+  const files = listGraphNotes(dir);
 
   const nodes = new Map<string, GraphNode>();
   const communityIds = new Map<string, number>();

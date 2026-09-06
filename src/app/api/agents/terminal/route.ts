@@ -50,7 +50,12 @@ export async function POST(req: Request) {
   });
 }
 
-/** GET ?agent=claude-code — resolve CLI without starting a session */
+/**
+ * GET ?agent=claude-code[&cwd=…] — resolve the CLI *and* the governance that
+ * will be applied (auth mode, approval flags, workspace scope) without
+ * starting a session. The desktop shell calls this before `pty:start` so the
+ * main-process PTY spawns under the same policy as the web path.
+ */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const agent = (url.searchParams.get("agent") || "").trim() as ExternalAgentId;
@@ -60,6 +65,7 @@ export async function GET(req: Request) {
   if (!VALID.has(agent)) {
     return NextResponse.json({ ok: false, error: "Unknown agent" }, { status: 400 });
   }
-  const resolved = resolveAgentCommand(agent);
+  const cwd = url.searchParams.get("cwd")?.trim() || undefined;
+  const resolved = resolveAgentCommand(agent, { cwd });
   return NextResponse.json(resolved, { status: resolved.ok ? 200 : 404 });
 }
