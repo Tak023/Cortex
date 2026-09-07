@@ -496,12 +496,35 @@ describe("concept integrity", () => {
       "tests/unit/page.test.tsx",
       `import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import React from "react";
 import Page from "../../app/page";
 import { concept } from "../../lib/concept";
 
+/**
+ * Next App Router pages are often async server components. Rendering one as
+ * <Page /> hands React a Promise, which it silently drops — the body renders
+ * empty and every assertion fails identically. A live pipeline run failed its
+ * Testing phase exactly this way on a perfectly good app.
+ *
+ * Async components cannot use hooks, so calling the function directly and
+ * awaiting its element is safe; sync components (which may use hooks) go
+ * through normal JSX rendering.
+ */
+async function renderPage() {
+  const isAsync =
+    (Page as unknown as { constructor: { name: string } }).constructor.name ===
+    "AsyncFunction";
+  if (isAsync) {
+    const el = await (Page as unknown as (p: object) => Promise<React.ReactElement>)({});
+    render(el);
+  } else {
+    render(React.createElement(Page as React.ComponentType));
+  }
+}
+
 describe("home page", () => {
-  it("renders a primary heading", () => {
-    render(<Page />);
+  it("renders a primary heading", async () => {
+    await renderPage();
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toBeTruthy();
     expect((heading.textContent || "").trim().length).toBeGreaterThan(0);
@@ -511,22 +534,22 @@ describe("home page", () => {
   // Requiring "Features" and "Stack" headings only held for the placeholder,
   // so any real implementation failed and was reverted to the placeholder to
   // make these pass.
-  it("renders without crashing and produces content", () => {
-    render(<Page />);
+  it("renders without crashing and produces content", async () => {
+    await renderPage();
     const text = document.body.textContent || "";
     expect(text.trim().length).toBeGreaterThan(0);
   });
 
-  it("renders navigable or readable structure", () => {
-    render(<Page />);
+  it("renders navigable or readable structure", async () => {
+    await renderPage();
     const headings = screen.queryAllByRole("heading");
     const links = screen.queryAllByRole("link");
     const text = (document.body.textContent || "").trim();
     expect(headings.length + links.length > 0 || text.length > 40).toBe(true);
   });
 
-  it("reflects the project rather than an empty shell", () => {
-    render(<Page />);
+  it("reflects the project rather than an empty shell", async () => {
+    await renderPage();
     const text = (document.body.textContent || "").toLowerCase();
     const words = concept.title
       .toLowerCase()

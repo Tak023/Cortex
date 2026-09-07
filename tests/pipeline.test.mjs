@@ -141,7 +141,12 @@ export async function run(mod) {
     check("no required Stack heading",
       !/getAllByRole\("heading", \{ name: \/stack\/i \}\)/.test(spec));
     check("still asserts the page renders content",
-      /toBeGreaterThan\(0\)/.test(spec) && /render\(<Page \/>\)/.test(spec));
+      /toBeGreaterThan\(0\)/.test(spec) && /renderPage\(\)/.test(spec));
+    // Regression: a live run failed all four page tests on a perfectly good
+    // app because the page was an async server component — render(<Page />)
+    // hands React a Promise and the body renders empty.
+    check("generated tests handle async server components",
+      /AsyncFunction/.test(spec) && /await renderPage\(\)/.test(spec));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
